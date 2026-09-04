@@ -1,3 +1,4 @@
+import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -17,7 +18,17 @@ kotlin {
             isStatic = true
         }
     }
-    
+
+    @OptIn(ExperimentalWasmDsl::class)
+    wasmJs {
+        browser {
+            commonWebpackConfig {
+                outputFileName = "usbrain.js"
+            }
+        }
+        binaries.executable()
+    }
+
     android {
        namespace = "org.usbrain.project.shared"
        compileSdk = libs.versions.android.compileSdk.get().toInt()

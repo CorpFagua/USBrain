@@ -3,7 +3,7 @@
 Aplicación móvil para el **registro, seguimiento y análisis de conducta bajo diseño de caso único**,
 para los servicios de atención psicológica de la Universidad de San Buenaventura, sede Bogotá.
 
-Proyecto Kotlin Multiplatform (Android + iOS) con UI compartida en Compose Multiplatform.
+Proyecto Kotlin Multiplatform (Android + iOS + **Web**) con UI compartida en Compose Multiplatform.
 
 ---
 
@@ -86,6 +86,28 @@ o la variable `ANDROID_HOME`. Luego abrir el proyecto en Android Studio y usar e
 
 Abrir [`/iosApp`](./iosApp) en Xcode y ejecutar el esquema `iosApp` en un simulador,
 o compilar la app KMP con la tarea `:shared:embedAndSignAppleFrameworkForXcode`.
+
+### Web (Kotlin/Wasm)
+
+```bash
+./gradlew :shared:wasmJsBrowserDevelopmentRun
+```
+
+Levanta un servidor de desarrollo (con recarga en caliente) en `http://localhost:8080`.
+Requiere un navegador reciente con soporte de WebAssembly GC (Chrome/Edge 119+, Firefox 120+, Safari 18.2+).
+
+Para generar los archivos estáticos listos para publicar (por ejemplo en GitHub Pages, Netlify o cualquier
+hosting estático):
+
+```bash
+./gradlew :shared:wasmJsBrowserDistribution
+```
+
+El resultado queda en `shared/build/dist/wasmJs/productionExecutable/`.
+
+El punto de entrada web vive en `shared/src/wasmJsMain/` (`main.kt` monta `App()` con `ComposeViewport`,
+`Platform.wasmJs.kt` implementa el `expect` de plataforma, `resources/index.html` es la página anfitriona).
+Es el mismo `App()` que corre en Android e iOS — no hay una versión de UI aparte para web.
 
 ### Pruebas
 
