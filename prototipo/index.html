@@ -1,0 +1,1210 @@
+<title>USBrain · Prototipo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<style>
+  :root{
+    --orange:#FF7A00;
+    --orange-deep:#E86E00;
+    --coral:#FF6B56;
+    --violet:#7B66C2;
+    --navy:#0F2540;
+
+    --backdrop:#EFEAE2;
+    --backdrop-2:#E4DccF;
+    --paper:#FAF8F5;
+    --surface:#FFFFFF;
+    --surface-2:#F5F0E9;
+    --ink:#1C2836;
+    --muted:#736A5C;
+    --line:#E7E0D5;
+    --bezel:#0F2540;
+    --bezel-edge:#233953;
+
+    --good:#2FA36B;
+    --pending:#C97A16;
+
+    --ring:rgba(255,122,0,.45);
+    --shadow:0 18px 50px -18px rgba(15,37,64,.35);
+    --shadow-sm:0 6px 18px -8px rgba(15,37,64,.30);
+    --r:18px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --backdrop:#081221;
+      --backdrop-2:#0c1c30;
+      --paper:#0C1B2C;
+      --surface:#122437;
+      --surface-2:#182f45;
+      --ink:#E9F0F7;
+      --muted:#9BAFC2;
+      --line:#243c53;
+      --bezel:#1b3350;
+      --bezel-edge:#2c4a6b;
+      --good:#4CC98C;
+      --pending:#E1A33F;
+      --shadow:0 18px 50px -18px rgba(0,0,0,.65);
+      --shadow-sm:0 6px 18px -8px rgba(0,0,0,.55);
+    }
+  }
+  :root[data-theme="dark"]{
+    --backdrop:#081221;
+    --backdrop-2:#0c1c30;
+    --paper:#0C1B2C;
+    --surface:#122437;
+    --surface-2:#182f45;
+    --ink:#E9F0F7;
+    --muted:#9BAFC2;
+    --line:#243c53;
+    --bezel:#1b3350;
+    --bezel-edge:#2c4a6b;
+    --good:#4CC98C;
+    --pending:#E1A33F;
+    --shadow:0 18px 50px -18px rgba(0,0,0,.65);
+    --shadow-sm:0 6px 18px -8px rgba(0,0,0,.55);
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    font-family:"Hanken Grotesk",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    color:var(--ink);
+    background:
+      radial-gradient(1100px 700px at 12% -10%, var(--backdrop-2), transparent 60%),
+      radial-gradient(900px 600px at 110% 120%, var(--backdrop-2), transparent 55%),
+      var(--backdrop);
+    background-attachment:fixed;
+    min-height:100vh;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,h4{font-family:"Poppins",sans-serif;line-height:1.2;text-wrap:balance}
+  button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit}
+  input,select,textarea{font-family:inherit;font-size:1rem;color:inherit}
+  :focus-visible{outline:2.5px solid var(--ring);outline-offset:2px;border-radius:6px}
+  @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+  /* ---------- shell ---------- */
+  .wrap{
+    max-width:1180px;margin:0 auto;padding:26px 20px 60px;
+    display:grid;gap:30px;
+    grid-template-columns:minmax(0,1fr) minmax(0,360px);
+    align-items:start;
+  }
+  @media (max-width:900px){
+    .wrap{grid-template-columns:1fr;gap:20px;padding:16px 12px 40px}
+    .rail{order:-1}
+  }
+
+  .topbar{
+    grid-column:1/-1;
+    display:flex;flex-wrap:wrap;gap:16px 22px;align-items:center;justify-content:space-between;
+  }
+  .lockup{display:flex;align-items:center;gap:12px}
+  .mark{width:46px;height:46px;flex:none;filter:drop-shadow(0 6px 14px rgba(15,37,64,.22))}
+  .wm-name{font-family:"Poppins";font-weight:700;font-size:1.42rem;letter-spacing:-.01em;line-height:1}
+  .wm-us{color:var(--orange)}
+  .wm-brain{color:var(--ink);font-weight:600}
+  .wm-tag{
+    font-size:.58rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--muted);margin-top:5px;
+  }
+  .topbar-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+
+  .seg{display:inline-flex;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:4px}
+  .seg button{
+    padding:7px 14px;border-radius:999px;font-size:.82rem;font-weight:600;color:var(--muted);
+    transition:background .15s,color .15s;white-space:nowrap;
+  }
+  .seg button[aria-pressed="true"]{background:var(--navy);color:#fff}
+  :root[data-theme="dark"] .seg button[aria-pressed="true"]{background:var(--orange);color:#231200}
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]) .seg button[aria-pressed="true"]{background:var(--orange);color:#231200}
+  }
+
+  .ghost-btn{
+    display:inline-flex;align-items:center;gap:7px;
+    padding:8px 14px;border-radius:999px;border:1px solid var(--line);
+    background:var(--surface);font-size:.82rem;font-weight:600;color:var(--ink);
+    box-shadow:var(--shadow-sm);transition:transform .12s;
+  }
+  .ghost-btn:hover{transform:translateY(-1px)}
+
+  /* ---------- device ---------- */
+  .stage{display:flex;justify-content:center}
+  .device{
+    width:390px;max-width:100%;
+    height:min(844px,86vh);
+    background:var(--bezel);
+    border-radius:52px;
+    padding:13px;
+    box-shadow:var(--shadow), inset 0 0 0 2px var(--bezel-edge);
+    position:relative;
+  }
+  .device::after{ /* side button */
+    content:"";position:absolute;right:-3px;top:150px;width:3px;height:78px;border-radius:3px;background:var(--bezel-edge);
+  }
+  .screen{
+    position:absolute;inset:13px;
+    background:var(--paper);
+    border-radius:40px;
+    overflow:hidden;
+    display:flex;flex-direction:column;
+  }
+  .statusbar{
+    flex:none;height:34px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 26px;font-size:.72rem;font-weight:700;font-family:"IBM Plex Mono";color:var(--ink);
+    background:var(--paper);
+  }
+  .statusbar .dots{display:flex;gap:3px;align-items:center}
+  .statusbar .dots i{width:5px;height:5px;border-radius:50%;background:var(--ink);opacity:.55;display:block}
+  .statusbar .batt{width:22px;height:11px;border:1.5px solid var(--ink);border-radius:3px;position:relative;opacity:.7}
+  .statusbar .batt::after{content:"";position:absolute;left:1.5px;top:1.5px;bottom:1.5px;width:60%;background:var(--ink);border-radius:1px}
+
+  .view{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
+  .view::-webkit-scrollbar{width:0}
+  .pad{padding:20px 20px 28px}
+  .pad-b{padding-bottom:96px}
+
+  .tabbar{
+    flex:none;position:absolute;left:13px;right:13px;bottom:13px;
+    height:74px;border-radius:0 0 40px 40px;
+    background:color-mix(in srgb,var(--surface) 92%,transparent);
+    backdrop-filter:blur(10px);
+    border-top:1px solid var(--line);
+    display:flex;align-items:center;justify-content:space-around;padding:0 6px 8px;
+  }
+  .tabbar button{
+    display:flex;flex-direction:column;align-items:center;gap:3px;
+    font-size:.63rem;font-weight:600;color:var(--muted);padding:8px 10px;border-radius:14px;flex:1;
+  }
+  .tabbar button svg{width:22px;height:22px}
+  .tabbar button[aria-current="true"]{color:var(--orange)}
+
+  /* ---------- generic ui ---------- */
+  .eyebrow{font-size:.66rem;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+  .h-screen{font-size:1.5rem;font-weight:700;margin:6px 0 2px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:.9rem}
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:16px;box-shadow:var(--shadow-sm);
+  }
+  .stack{display:flex;flex-direction:column;gap:12px}
+  .row{display:flex;align-items:center;gap:12px}
+  .between{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .grow{flex:1;min-width:0}
+  .muted{color:var(--muted)}
+  .tiny{font-size:.76rem}
+  .mono{font-family:"IBM Plex Mono";font-variant-numeric:tabular-nums}
+
+  .btn{
+    display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
+    padding:14px 18px;border-radius:15px;font-weight:700;font-size:.95rem;
+    background:var(--orange);color:#231200;
+    box-shadow:0 10px 24px -10px rgba(255,122,0,.7);
+    transition:transform .12s,filter .12s;
+  }
+  .btn:hover{transform:translateY(-1px);filter:brightness(1.03)}
+  .btn:active{transform:translateY(0)}
+  .btn.secondary{background:var(--surface);color:var(--ink);border:1px solid var(--line);box-shadow:var(--shadow-sm)}
+  .btn.navy{background:var(--navy);color:#fff;box-shadow:0 10px 24px -12px rgba(15,37,64,.8)}
+  .btn.small{width:auto;padding:9px 14px;font-size:.82rem;border-radius:12px}
+
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+    font-size:.7rem;font-weight:700;letter-spacing:.02em;
+  }
+  .pill.dot::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+  .pill.pending{background:color-mix(in srgb,var(--pending) 15%,transparent);color:var(--pending)}
+  .pill.done{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
+  .pill.base{background:color-mix(in srgb,var(--coral) 16%,transparent);color:var(--coral)}
+  .pill.interv{background:color-mix(in srgb,var(--violet) 18%,transparent);color:var(--violet)}
+
+  .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+  .field label{font-size:.8rem;font-weight:700}
+  .field .hint{font-size:.74rem;color:var(--muted)}
+  .field input[type=text],.field input[type=email],.field input[type=password],
+  .field input[type=number],.field input[type=date],.field select,.field textarea{
+    width:100%;padding:12px 13px;border-radius:12px;border:1px solid var(--line);
+    background:var(--surface);transition:border-color .15s,box-shadow .15s;
+  }
+  .field textarea{resize:vertical;min-height:74px}
+  .field input:focus,.field select:focus,.field textarea:focus{
+    outline:none;border-color:var(--orange);box-shadow:0 0 0 3px var(--ring)
+  }
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{
+    padding:9px 13px;border-radius:12px;border:1px solid var(--line);background:var(--surface);
+    font-size:.82rem;font-weight:600;color:var(--muted);transition:all .13s;
+  }
+  .chip[aria-pressed="true"]{border-color:var(--orange);background:color-mix(in srgb,var(--orange) 12%,transparent);color:var(--orange-deep)}
+  :root[data-theme="dark"] .chip[aria-pressed="true"]{color:var(--orange)}
+
+  .avatar{
+    width:42px;height:42px;border-radius:14px;flex:none;display:flex;align-items:center;justify-content:center;
+    font-family:"Poppins";font-weight:700;font-size:.95rem;color:#fff;
+  }
+  .list-item{
+    display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+    background:var(--surface);border:1px solid var(--line);border-radius:15px;padding:13px;
+    box-shadow:var(--shadow-sm);transition:transform .12s;
+  }
+  .list-item:hover{transform:translateY(-1px)}
+
+  /* chart */
+  .chart-wrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 12px 8px;box-shadow:var(--shadow-sm)}
+  .chart-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.7rem;font-weight:600;color:var(--muted);padding:2px 4px 0}
+  .chart-legend span{display:inline-flex;align-items:center;gap:5px}
+  .chart-legend i{width:9px;height:9px;border-radius:3px;display:block}
+
+  /* stepper / slider */
+  .stepper{display:flex;align-items:center;gap:14px;justify-content:center;padding:6px 0}
+  .stepper button{
+    width:48px;height:48px;border-radius:14px;border:1px solid var(--line);background:var(--surface);
+    font-size:1.5rem;font-weight:700;color:var(--orange-deep);box-shadow:var(--shadow-sm);
+  }
+  .stepper .val{font-family:"Poppins";font-weight:700;font-size:2.6rem;min-width:96px;text-align:center}
+  input[type=range]{width:100%;accent-color:var(--orange);height:30px}
+  .scale-val{font-family:"Poppins";font-weight:700;font-size:3rem;text-align:center;color:var(--orange-deep)}
+  :root[data-theme="dark"] .scale-val{color:var(--orange)}
+  .scale-ticks{display:flex;justify-content:space-between;font-size:.68rem;color:var(--muted);padding:0 2px;font-family:"IBM Plex Mono"}
+
+  .banner{
+    display:flex;gap:10px;align-items:flex-start;
+    background:color-mix(in srgb,var(--violet) 12%,transparent);
+    border:1px solid color-mix(in srgb,var(--violet) 30%,transparent);
+    border-radius:14px;padding:12px 13px;font-size:.83rem;
+  }
+  .banner.ok{background:color-mix(in srgb,var(--good) 12%,transparent);border-color:color-mix(in srgb,var(--good) 32%,transparent)}
+  .banner svg{width:18px;height:18px;flex:none;margin-top:1px}
+
+  .success-check{
+    width:82px;height:82px;border-radius:50%;margin:0 auto;
+    background:color-mix(in srgb,var(--good) 16%,transparent);
+    display:flex;align-items:center;justify-content:center;
+    animation:pop .4s cubic-bezier(.2,1.3,.5,1);
+  }
+  .success-check svg{width:40px;height:40px;stroke:var(--good)}
+  @keyframes pop{from{transform:scale(.5);opacity:0}to{transform:scale(1);opacity:1}}
+  .fade{animation:fade .28s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+  /* 2fa */
+  .otp{display:flex;gap:9px;justify-content:center;margin:8px 0}
+  .otp input{
+    width:44px;height:54px;text-align:center;font-family:"IBM Plex Mono";font-size:1.4rem;font-weight:500;
+    border:1px solid var(--line);border-radius:12px;background:var(--surface);
+  }
+  .otp input:focus{outline:none;border-color:var(--orange);box-shadow:0 0 0 3px var(--ring)}
+
+  /* login role picker */
+  .role-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .role-card{
+    display:flex;flex-direction:column;gap:6px;align-items:flex-start;
+    padding:13px;border-radius:15px;border:1.5px solid var(--line);background:var(--surface);text-align:left;
+    transition:all .14s;
+  }
+  .role-card[aria-pressed="true"]{border-color:var(--orange);box-shadow:0 0 0 3px var(--ring)}
+  .role-card .ic{width:34px;height:34px;border-radius:11px;display:flex;align-items:center;justify-content:center;color:#fff}
+  .role-card b{font-family:"Poppins";font-size:.92rem}
+  .role-card span{font-size:.72rem;color:var(--muted);line-height:1.35}
+
+  /* rail (desktop notes) */
+  .rail{display:flex;flex-direction:column;gap:16px;position:sticky;top:24px}
+  .rail .card h3{font-size:1rem;margin-bottom:8px}
+  .note-list{display:flex;flex-direction:column;gap:10px}
+  .note-list li{display:flex;gap:9px;font-size:.86rem;color:var(--ink);list-style:none}
+  .note-list li::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--orange);margin-top:7px;flex:none}
+  .rail .meta{font-size:.78rem;color:var(--muted)}
+  .swatches{display:flex;gap:6px;margin-top:4px}
+  .swatches i{width:22px;height:22px;border-radius:7px;display:block;border:1px solid rgba(0,0,0,.08)}
+  .kbd{font-family:"IBM Plex Mono";font-size:.7rem;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+
+  .footnote{grid-column:1/-1;text-align:center;font-size:.76rem;color:var(--muted);padding-top:6px}
+</style>
+
+<div class="wrap">
+  <header class="topbar">
+    <div class="lockup">
+      <span id="brandmark"></span>
+      <div class="wordmark">
+        <div class="wm-name"><span class="wm-us">US</span><span class="wm-brain">Brain</span></div>
+        <div class="wm-tag">Registra · Entiende · Transforma</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <div class="seg" role="group" aria-label="Cambio rápido de sesión">
+        <button data-jump="login" aria-pressed="true">Inicio de sesión</button>
+        <button data-jump="paciente" aria-pressed="false">Sesión paciente</button>
+        <button data-jump="terapeuta" aria-pressed="false">Sesión terapeuta</button>
+      </div>
+      <button class="ghost-btn" id="themeBtn" aria-label="Cambiar tema">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg>
+        Tema
+      </button>
+      <button class="ghost-btn" id="resetBtn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+        Reiniciar demo
+      </button>
+    </div>
+  </header>
+
+  <section class="stage">
+    <div class="device">
+      <div class="screen">
+        <div class="statusbar">
+          <span id="clock">9:41</span>
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span class="row" style="gap:6px"><span class="mono" style="font-size:.62rem">5G</span><span class="batt"></span></span>
+        </div>
+        <div class="view" id="view"></div>
+        <nav class="tabbar" id="tabbar" hidden></nav>
+      </div>
+    </div>
+  </section>
+
+  <aside class="rail">
+    <div class="card">
+      <h3 id="noteTitle">Guía para el asesor</h3>
+      <p class="meta" id="noteMeta">Entrega interactiva — simulación de flujos.</p>
+      <ul class="note-list" id="noteList"></ul>
+    </div>
+    <div class="card">
+      <h3>Identidad</h3>
+      <p class="meta">Paleta oficial del proyecto</p>
+      <div class="swatches">
+        <i style="background:#FF7A00" title="#FF7A00"></i>
+        <i style="background:#FF6B56" title="#FF6B56"></i>
+        <i style="background:#7B66C2" title="#7B66C2"></i>
+        <i style="background:#0F2540" title="#0F2540"></i>
+      </div>
+      <p class="meta" style="margin-top:10px">El logotipo se reconstruyó como marca vectorial: cuatro fichas <b>U·S·B</b> que encajan y una red sináptica blanca (“Brain”) en el centro. Se usa como ícono en la app y como lockup completo en el encabezado.</p>
+    </div>
+    <div class="card">
+      <h3>Cuentas de prueba</h3>
+      <p class="meta">Paciente · <span class="mono">ana.torres@usbbog.edu.co</span></p>
+      <p class="meta">Terapeuta · <span class="mono">e.patino@usb.edu.co</span></p>
+      <p class="meta">Contraseña <span class="kbd">••••••</span> · Código 2FA <span class="kbd">304 917</span> (precargados)</p>
+    </div>
+  </aside>
+
+  <p class="footnote">USBrain — Registro, seguimiento y análisis de conducta bajo diseño de caso único · Universidad de San Buenaventura, Bogotá · Prototipo no funcional para revisión.</p>
+</div>
+
+<script>
+/* ============ marca / logo ============ */
+function logoIcon(cls){
+  return `<svg class="${cls||'mark'}" viewBox="0 0 120 120" role="img" aria-label="USBrain">
+    <rect x="10" y="10" width="46" height="46" rx="15" fill="#7B66C2"/>
+    <rect x="64" y="10" width="46" height="46" rx="15" fill="#0F2540"/>
+    <rect x="10" y="64" width="46" height="46" rx="15" fill="#FF6B56"/>
+    <rect x="64" y="64" width="46" height="46" rx="15" fill="#FF7A00"/>
+    <circle cx="60" cy="30" r="7.5" fill="#7B66C2"/>
+    <circle cx="60" cy="90" r="7.5" fill="#FF7A00"/>
+    <circle cx="30" cy="60" r="7.5" fill="#FF6B56"/>
+    <circle cx="90" cy="60" r="7.5" fill="#0F2540"/>
+    <g stroke="#FAF8F5" stroke-width="3.4" stroke-linecap="round">
+      <line x1="60" y1="60" x2="41" y2="42"/><line x1="60" y1="60" x2="79" y2="42"/>
+      <line x1="60" y1="60" x2="43" y2="79"/><line x1="60" y1="60" x2="79" y2="79"/>
+    </g>
+    <g fill="#FAF8F5">
+      <circle cx="60" cy="60" r="7"/>
+      <circle cx="41" cy="42" r="4.4"/><circle cx="79" cy="42" r="4.4"/>
+      <circle cx="43" cy="79" r="4.4"/><circle cx="79" cy="79" r="4.4"/>
+    </g>
+  </svg>`;
+}
+document.getElementById('brandmark').innerHTML = logoIcon('mark');
+
+/* ============ estado ============ */
+const DIMENSIONS = {
+  frecuencia:{label:'Frecuencia',unit:'episodios',hint:'Cuántas veces ocurre la conducta',input:'stepper'},
+  duracion:{label:'Duración',unit:'minutos',hint:'Cuánto dura cada ocurrencia',input:'number'},
+  intensidad:{label:'Intensidad',unit:'/ 10',hint:'Qué tan intensa fue, escala 0–10',input:'scale'}
+};
+const CADENCIAS = ['Diario','2 veces al día','Cada sesión','Semanal'];
+
+function seed(){
+  return {
+    screen:'login',
+    role:null,
+    theme:null,
+    loginRole:'paciente',
+    me:'ana',
+    activePatient:'ana',
+    activeTask:null,
+    tab:'inicio',
+    draft:blankDraft(),
+    patients:{
+      ana:{
+        id:'ana',name:'Ana Torres',age:20,program:'Psicología · 4º sem',
+        color:'#7B66C2',
+        condition:'Ansiedad social',
+        phase:'intervencion',
+        behavior:'Episodios de ansiedad en clase',
+        dimension:'frecuencia',
+        baselineDays:7,
+        series:[5,6,5,7,6,6,5, 4,4,3,4,3],
+        tasks:[
+          {id:'t1',title:'Registrar episodios de ansiedad del día',
+           instructions:'Al terminar el día, anota cuántas veces sentiste un episodio de ansiedad marcado durante las clases.',
+           dimension:'frecuencia',cadence:'Diario',due:'Hoy, 21:00',phase:'intervencion',
+           status:'pendiente',feedsSeries:true,entries:[]},
+          {id:'t2',title:'Escala de malestar antes de exponer en clase',
+           instructions:'Justo antes de tu presentación, registra tu nivel de malestar de 0 (nada) a 10 (máximo).',
+           dimension:'intensidad',cadence:'Cada sesión',due:'Mié 3 sep',phase:'intervencion',
+           status:'pendiente',feedsSeries:false,entries:[]},
+          {id:'t0',title:'Registrar episodios de ansiedad del día',
+           instructions:'Al terminar el día, anota cuántas veces sentiste un episodio de ansiedad marcado.',
+           dimension:'frecuencia',cadence:'Diario',due:'Ayer, 21:00',phase:'intervencion',
+           status:'completada',feedsSeries:true,entries:[{date:'Ayer',value:3,note:'Solo en la clase de la tarde.'}]}
+        ]
+      },
+      daniel:{
+        id:'daniel',name:'Daniel Ruiz',age:23,program:'Ing. Industrial · 8º sem',
+        color:'#FF6B56',
+        condition:'Insomnio de conciliación',
+        phase:'linea_base',
+        behavior:'Minutos para conciliar el sueño',
+        dimension:'duracion',
+        baselineDays:14,
+        series:[52,60,45,58,50,63,48,55],
+        tasks:[
+          {id:'d1',title:'Tiempo que tardaste en dormirte',
+           instructions:'Cada mañana estima cuántos minutos pasaron desde que apagaste la luz hasta quedarte dormido.',
+           dimension:'duracion',cadence:'Diario',due:'Mañana, 08:00',phase:'linea_base',
+           status:'pendiente',feedsSeries:true,entries:[]}
+        ]
+      }
+    }
+  };
+}
+function blankDraft(){
+  return {patient:'ana',behavior:'',dimension:'frecuencia',cadence:'Diario',phase:'intervencion',due:'',instructions:''};
+}
+let S = load() || seed();
+function load(){try{const r=JSON.parse(localStorage.getItem('usbrain-proto'));return r&&r.patients?r:null}catch(e){return null}}
+function save(){try{localStorage.setItem('usbrain-proto',JSON.stringify(S))}catch(e){}}
+
+/* ============ tema ============ */
+function applyTheme(){
+  if(S.theme) document.documentElement.setAttribute('data-theme',S.theme);
+  else document.documentElement.removeAttribute('data-theme');
+}
+document.getElementById('themeBtn').addEventListener('click',()=>{
+  const cur = S.theme || (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+  S.theme = cur==='dark'?'light':'dark';
+  applyTheme();save();
+});
+document.getElementById('resetBtn').addEventListener('click',()=>{
+  const t=S.theme; S=seed(); S.theme=t; save(); render();
+});
+
+/* ============ navegación ============ */
+function go(screen,opts={}){ S.screen=screen; Object.assign(S,opts); save(); render(); }
+
+document.querySelectorAll('[data-jump]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    const j=b.dataset.jump;
+    if(j==='login'){ S.role=null; go('login'); }
+    if(j==='paciente'){ S.role='paciente'; S.me='ana'; S.activePatient='ana'; S.tab='inicio'; go('patientHome'); }
+    if(j==='terapeuta'){ S.role='terapeuta'; S.tab='pacientes'; go('therapistHome'); }
+  });
+});
+function syncSeg(){
+  const map={login:'login',patientHome:'paciente',patientTask:'paciente',patientDone:'paciente',patientProgress:'paciente',
+    therapistHome:'terapeuta',therapistPatient:'terapeuta',therapistNewTask:'terapeuta',therapistAssigned:'terapeuta',therapistProgress:'terapeuta','2fa':'login'};
+  const cur=map[S.screen]||'login';
+  document.querySelectorAll('[data-jump]').forEach(b=>b.setAttribute('aria-pressed', String(b.dataset.jump===cur)));
+}
+
+/* ============ helpers ui ============ */
+const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function phasePill(p){ return p==='linea_base'
+  ? '<span class="pill base dot">Línea base</span>'
+  : '<span class="pill interv dot">Intervención</span>'; }
+function statusPill(s){ return s==='completada'
+  ? '<span class="pill done dot">Completada</span>'
+  : '<span class="pill pending dot">Pendiente</span>'; }
+function initials(n){ return n.split(' ').map(x=>x[0]).slice(0,2).join(''); }
+function greeting(){ const h=new Date().getHours(); return h<12?'Buenos días':h<19?'Buenas tardes':'Buenas noches'; }
+function todayStr(){ return new Date().toLocaleDateString('es-CO',{weekday:'long',day:'numeric',month:'long'}); }
+
+/* ============ gráfica de tendencia (plano cartesiano) ============ */
+function trendChart(p,{h=150}={}){
+  const data=p.series, n=data.length, w=300;
+  const padL=26,padB=18,padT=8,padR=8;
+  const iw=w-padL-padR, ih=h-padT-padB;
+  const max=Math.max(...data)*1.15, min=0;
+  const x=i=> padL + (n<=1?0:i*iw/(n-1));
+  const y=v=> padT + ih - (v-min)/(max-min)*ih;
+  const bl=p.baselineDays;
+  const splitX = bl<n ? x(bl-0.5) : null;
+  let grid='';
+  for(let g=0;g<=4;g++){ const gy=padT+ih*g/4; grid+=`<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${w-padR}" y2="${gy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`; }
+  const yl=v=>`<text x="${padL-6}" y="${(y(v)+3).toFixed(1)}" text-anchor="end" font-size="8" fill="var(--muted)" font-family="IBM Plex Mono">${v}</text>`;
+  const line = data.map((v,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const area = `M${x(0).toFixed(1)},${(padT+ih).toFixed(1)} `+data.map((v,i)=>`L${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')+` L${x(n-1).toFixed(1)},${(padT+ih).toFixed(1)} Z`;
+  const dots = data.map((v,i)=>{
+    const last=i===n-1;
+    const c = i<bl ? 'var(--coral)' : 'var(--violet)';
+    return `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="${last?4.5:2.6}" fill="${c}" ${last?'stroke="var(--surface)" stroke-width="2"':''}/>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet" style="display:block">
+    ${grid}
+    ${splitX!=null?`<rect x="${padL}" y="${padT}" width="${(splitX-padL).toFixed(1)}" height="${ih}" fill="var(--coral)" opacity=".06"/>
+      <line x1="${splitX.toFixed(1)}" y1="${padT}" x2="${splitX.toFixed(1)}" y2="${padT+ih}" stroke="var(--violet)" stroke-width="1.5" stroke-dasharray="3 3"/>`:''}
+    ${yl(0)}${yl(Math.round(max/2))}${yl(Math.round(max))}
+    <path d="${area}" fill="var(--violet)" opacity=".10"/>
+    <path d="${line}" fill="none" stroke="url(#g1)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    ${dots}
+    <defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="var(--coral)"/><stop offset="1" stop-color="var(--violet)"/>
+    </linearGradient></defs>
+  </svg>`;
+}
+function chartCard(p){
+  return `<div class="chart-wrap">
+    <div class="between" style="padding:0 4px 6px">
+      <div><div class="tiny muted">${esc(p.behavior)}</div>
+      <div style="font-family:'Poppins';font-weight:600;font-size:.9rem">Tendencia · ${DIMENSIONS[p.dimension].label}</div></div>
+      ${phasePill(p.phase)}
+    </div>
+    ${trendChart(p)}
+    <div class="chart-legend">
+      <span><i style="background:var(--coral)"></i>Línea base (${p.baselineDays} días)</span>
+      <span><i style="background:var(--violet)"></i>Intervención</span>
+      <span><i style="background:var(--muted);width:10px;height:2px;border-radius:2px"></i>eje X: días · eje Y: ${DIMENSIONS[p.dimension].unit.replace('/ 10','0–10')}</span>
+    </div>
+  </div>`;
+}
+
+/* ============ tarjeta de tarea (vista del paciente) ============ */
+function taskCard(t,{clickable=true}={}){
+  const d=DIMENSIONS[t.dimension];
+  const tag = clickable?'button':'div';
+  return `<${tag} class="list-item" style="align-items:flex-start;flex-direction:column;gap:9px"
+      ${clickable?`data-task="${t.id}"`:''}>
+    <div class="between" style="width:100%">
+      <span class="eyebrow">${esc(t.cadence)} · ${d.label}</span>
+      ${statusPill(t.status)}
+    </div>
+    <div style="font-family:'Poppins';font-weight:600;font-size:.98rem;line-height:1.25">${esc(t.title)}</div>
+    <div class="tiny muted" style="line-height:1.4">${esc(t.instructions)}</div>
+    <div class="between" style="width:100%;margin-top:2px">
+      <span class="tiny mono muted">⏰ ${esc(t.due)}</span>
+      ${t.status==='completada'
+        ? `<span class="tiny" style="color:var(--good);font-weight:700">✓ ${t.entries.length?esc(String(t.entries[t.entries.length-1].value))+' '+d.unit.replace('/ 10',''):'registrada'}</span>`
+        : clickable?`<span class="tiny" style="color:var(--orange-deep);font-weight:700">Llenar tarea →</span>`:''}
+    </div>
+  </${tag}>`;
+}
+
+/* ============ pantallas ============ */
+function screenLogin(){
+  const r=S.loginRole;
+  const email = r==='paciente'?'ana.torres@usbbog.edu.co':'e.patino@usb.edu.co';
+  return `<div class="pad fade" style="display:flex;flex-direction:column;min-height:100%">
+    <div style="text-align:center;margin:18px 0 22px">
+      ${logoIcon('mark')}
+      <div class="wm-name" style="margin-top:12px;font-size:1.7rem"><span class="wm-us">US</span><span class="wm-brain">Brain</span></div>
+      <div class="wm-tag" style="justify-content:center">Registra · Entiende · Transforma</div>
+    </div>
+
+    <p class="eyebrow" style="margin-bottom:8px">Ingresa como</p>
+    <div class="role-grid" style="margin-bottom:18px">
+      <button class="role-card" data-role="paciente" aria-pressed="${r==='paciente'}">
+        <span class="ic" style="background:var(--violet)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M5 21c0-4 3-6 7-6s7 2 7 6"/></svg>
+        </span>
+        <b>Paciente</b><span>Consulta y llena las tareas que asigna tu terapeuta</span>
+      </button>
+      <button class="role-card" data-role="terapeuta" aria-pressed="${r==='terapeuta'}">
+        <span class="ic" style="background:var(--navy)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M4 19V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><path d="M9 12h6M9 16h6M9 8h3"/></svg>
+        </span>
+        <b>Terapeuta</b><span>Define conductas y asigna tareas de seguimiento</span>
+      </button>
+    </div>
+
+    <div class="field">
+      <label for="lg-email">Correo institucional</label>
+      <input id="lg-email" type="email" value="${email}" autocomplete="username">
+    </div>
+    <div class="field">
+      <label for="lg-pass">Contraseña</label>
+      <input id="lg-pass" type="password" value="claveDemo2026" autocomplete="current-password">
+    </div>
+
+    <button class="btn" data-act="login">Iniciar sesión</button>
+    <p class="tiny muted" style="text-align:center;margin-top:12px">
+      🔒 A continuación se solicita un <b>código de verificación (2FA)</b>, requisito de seguridad para datos clínicos.
+    </p>
+    <div style="flex:1"></div>
+    <p class="tiny muted" style="text-align:center">Universidad de San Buenaventura · Bogotá</p>
+  </div>`;
+}
+
+function screen2fa(){
+  const code=['3','0','4','9','1','7'];
+  return `<div class="pad fade" style="display:flex;flex-direction:column;min-height:100%">
+    <button class="tiny muted" data-act="back-login" style="align-self:flex-start;font-weight:600">← Volver</button>
+    <div style="text-align:center;margin:26px 0 10px">
+      <div class="success-check" style="background:color-mix(in srgb,var(--navy) 12%,transparent)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--navy)" stroke-width="2" stroke-linecap="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+      </div>
+      <h2 class="h-screen" style="margin-top:16px">Verificación en dos pasos</h2>
+      <p class="sub">Ingresa el código de 6 dígitos enviado a tu correo institucional.</p>
+    </div>
+    <div class="otp" id="otp">
+      ${code.map((c,i)=>`<input inputmode="numeric" maxlength="1" value="${c}" data-i="${i}" aria-label="Dígito ${i+1}">`).join('')}
+    </div>
+    <p class="tiny muted" style="text-align:center;margin-bottom:18px">Código de demostración precargado · <span class="mono">304 917</span></p>
+    <button class="btn navy" data-act="verify">Verificar e ingresar</button>
+    <button class="btn secondary" data-act="back-login" style="margin-top:10px">Cancelar</button>
+  </div>`;
+}
+
+/* ---- paciente ---- */
+function screenPatientHome(){
+  const p=S.patients[S.me];
+  const pend=p.tasks.filter(t=>t.status==='pendiente');
+  const done=p.tasks.filter(t=>t.status==='completada');
+  const streak=3+done.length;
+  return `<div class="view-inner"><div class="pad pad-b fade">
+    <div class="between">
+      <div>
+        <p class="eyebrow">${esc(todayStr())}</p>
+        <h1 class="h-screen">${greeting()}, ${p.name.split(' ')[0]}</h1>
+      </div>
+      <span class="avatar" style="background:${p.color}">${initials(p.name)}</span>
+    </div>
+    <p class="sub" style="margin-bottom:16px">Tienes <b>${pend.length} tarea${pend.length===1?'':'s'}</b> por registrar hoy.</p>
+
+    <div class="row" style="gap:10px;margin-bottom:18px">
+      <div class="card grow" style="text-align:center;padding:12px">
+        <div style="font-family:'Poppins';font-weight:700;font-size:1.6rem;color:var(--orange-deep)">${streak}</div>
+        <div class="tiny muted">días de racha</div>
+      </div>
+      <div class="card grow" style="text-align:center;padding:12px">
+        <div style="font-family:'Poppins';font-weight:700;font-size:1.6rem">${done.length}/${p.tasks.length}</div>
+        <div class="tiny muted">registros esta semana</div>
+      </div>
+    </div>
+
+    <p class="eyebrow" style="margin-bottom:8px">Tus tareas de hoy</p>
+    <div class="stack" style="margin-bottom:20px">
+      ${pend.map(t=>taskCard(t)).join('') || '<div class="card tiny muted">Todo al día. Vuelve más tarde para tu próximo registro.</div>'}
+    </div>
+
+    ${done.length?`<p class="eyebrow" style="margin-bottom:8px">Ya registradas</p>
+      <div class="stack" style="margin-bottom:20px">${done.map(t=>taskCard(t)).join('')}</div>`:''}
+
+    <p class="eyebrow" style="margin-bottom:8px">Tu progreso</p>
+    ${chartCard(p)}
+    <p class="tiny muted" style="margin-top:8px">Cada tarea que registras agrega un punto a esta gráfica. Tu terapeuta la revisa antes de cada sesión.</p>
+  </div></div>`;
+}
+
+function screenPatientTask(){
+  const p=S.patients[S.me];
+  const t=p.tasks.find(x=>x.id===S.activeTask);
+  if(!t) return screenPatientHome();
+  const d=DIMENSIONS[t.dimension];
+  let inputHtml='';
+  if(d.input==='stepper'){
+    inputHtml=`<div class="stepper">
+      <button data-step="-1" aria-label="Menos">–</button>
+      <div class="val" id="taskVal">0</div>
+      <button data-step="1" aria-label="Más">+</button>
+    </div><p class="tiny muted" style="text-align:center">episodios registrados hoy</p>`;
+  }else if(d.input==='number'){
+    inputHtml=`<div class="field"><input id="taskValNum" type="number" min="0" placeholder="0" style="font-size:1.6rem;text-align:center;font-family:'Poppins';font-weight:700">
+      <span class="hint" style="text-align:center">minutos</span></div>`;
+  }else if(d.input==='scale'){
+    inputHtml=`<div class="scale-val" id="scaleOut">5</div>
+      <input id="scaleIn" type="range" min="0" max="10" value="5">
+      <div class="scale-ticks"><span>0 · nada</span><span>5</span><span>10 · máximo</span></div>`;
+  }
+  return `<div class="view-inner"><div class="pad pad-b fade">
+    <button class="tiny muted" data-act="to-home" style="font-weight:600;margin-bottom:10px">← Mis tareas</button>
+
+    <div class="card" style="background:var(--surface-2);border-style:dashed">
+      <div class="between" style="margin-bottom:6px">
+        <span class="eyebrow">Indicaciones del terapeuta</span>${phasePill(t.phase)}
+      </div>
+      <div style="font-family:'Poppins';font-weight:600;margin-bottom:4px">${esc(t.title)}</div>
+      <p class="tiny" style="color:var(--ink)">${esc(t.instructions)}</p>
+      <p class="tiny mono muted" style="margin-top:8px">Medición: ${d.label} (${d.unit}) · ${esc(t.cadence)} · Entrega: ${esc(t.due)}</p>
+    </div>
+
+    <h2 class="h-screen" style="font-size:1.15rem;margin:18px 0 4px">${d.hint}</h2>
+    <div class="card" style="margin-bottom:14px">${inputHtml}</div>
+
+    <div class="field">
+      <label for="taskNote">¿Qué pasó? Nota para tu terapeuta <span class="muted" style="font-weight:400">(opcional)</span></label>
+      <textarea id="taskNote" placeholder="Ej.: fue peor en la mañana antes del parcial…"></textarea>
+    </div>
+
+    <button class="btn" data-act="save-task">Guardar registro</button>
+    <p class="tiny muted" style="text-align:center;margin-top:10px">Se marcará la tarea como completada y se enviará a tu gráfica de progreso.</p>
+  </div></div>`;
+}
+
+function screenPatientDone(){
+  const p=S.patients[S.me];
+  const t=p.tasks.find(x=>x.id===S.activeTask);
+  const e=t.entries[t.entries.length-1];
+  const d=DIMENSIONS[t.dimension];
+  return `<div class="view-inner"><div class="pad pad-b fade" style="display:flex;flex-direction:column;min-height:100%">
+    <div style="text-align:center;margin:30px 0 14px">
+      <div class="success-check"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></div>
+      <h2 class="h-screen" style="margin-top:16px">Registro guardado</h2>
+      <p class="sub">Gracias, ${p.name.split(' ')[0]}. Tu terapeuta ya puede verlo.</p>
+    </div>
+    <div class="card" style="text-align:center">
+      <div class="tiny muted">${esc(t.title)}</div>
+      <div style="font-family:'Poppins';font-weight:700;font-size:2.4rem;color:var(--orange-deep)">${esc(String(e.value))}<span style="font-size:1rem;color:var(--muted)"> ${d.unit.replace('/ 10','/10')}</span></div>
+      ${e.note?`<p class="tiny muted" style="font-style:italic">“${esc(e.note)}”</p>`:''}
+    </div>
+    ${t.feedsSeries?`<div style="margin-top:16px">${chartCard(p)}</div>
+      <p class="tiny muted" style="margin-top:8px;text-align:center">El último punto (destacado) es el que acabas de registrar.</p>`:''}
+    <div style="flex:1"></div>
+    <button class="btn secondary" data-act="to-home" style="margin-top:18px">Volver a mis tareas</button>
+  </div></div>`;
+}
+
+function screenPatientProgress(){
+  const p=S.patients[S.me];
+  const entries=[];
+  p.tasks.forEach(t=>t.entries.forEach(e=>entries.push({t,e})));
+  return `<div class="view-inner"><div class="pad pad-b fade">
+    <p class="eyebrow">${esc(p.condition)}</p>
+    <h1 class="h-screen">Mi progreso</h1>
+    <p class="sub" style="margin-bottom:16px">Conducta observada: <b>${esc(p.behavior)}</b></p>
+    ${chartCard(p)}
+    <p class="eyebrow" style="margin:18px 0 8px">Mis registros recientes</p>
+    <div class="stack">
+      ${entries.length?entries.reverse().map(({t,e})=>`<div class="card">
+        <div class="between"><span class="tiny" style="font-family:'Poppins';font-weight:600">${esc(t.title)}</span>
+        <span class="pill done">${esc(String(e.value))} ${DIMENSIONS[t.dimension].unit.replace('/ 10','/10')}</span></div>
+        <div class="tiny mono muted">${esc(e.date)}</div>
+        ${e.note?`<p class="tiny muted" style="font-style:italic;margin-top:4px">“${esc(e.note)}”</p>`:''}
+      </div>`).join(''):'<div class="card tiny muted">Aún no tienes registros.</div>'}
+    </div>
+  </div></div>`;
+}
+
+/* ---- terapeuta ---- */
+function screenTherapistHome(){
+  const list=Object.values(S.patients);
+  const totalPend=list.reduce((a,p)=>a+p.tasks.filter(t=>t.status==='pendiente').length,0);
+  return `<div class="view-inner"><div class="pad pad-b fade">
+    <div class="between">
+      <div><p class="eyebrow">Terapeuta</p><h1 class="h-screen">José E. Patiño</h1></div>
+      <span class="avatar" style="background:var(--navy)">JP</span>
+    </div>
+    <p class="sub" style="margin-bottom:16px">${list.length} pacientes activos · ${totalPend} tareas pendientes de registro.</p>
+
+    <button class="btn navy" data-act="new-task" style="margin-bottom:18px">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      Asignar nueva tarea
+    </button>
+
+    <p class="eyebrow" style="margin-bottom:8px">Mis pacientes</p>
+    <div class="stack">
+      ${list.map(p=>{
+        const pend=p.tasks.filter(t=>t.status==='pendiente').length;
+        return `<button class="list-item" data-patient="${p.id}">
+          <span class="avatar" style="background:${p.color}">${initials(p.name)}</span>
+          <span class="grow">
+            <span style="display:block;font-family:'Poppins';font-weight:600;font-size:.95rem">${esc(p.name)}</span>
+            <span class="tiny muted">${esc(p.condition)} · ${esc(p.behavior)}</span>
+          </span>
+          <span style="text-align:right">
+            ${phasePill(p.phase)}
+            <span class="tiny muted" style="display:block;margin-top:4px">${pend} pend.</span>
+          </span>
+        </button>`;
+      }).join('')}
+    </div>
+  </div></div>`;
+}
+
+function screenTherapistPatient(){
+  const p=S.patients[S.activePatient];
+  return `<div class="view-inner"><div class="pad pad-b fade">
+    <button class="tiny muted" data-act="to-home" style="font-weight:600;margin-bottom:10px">← Pacientes</button>
+    <div class="row" style="margin-bottom:6px">
+      <span class="avatar" style="background:${p.color};width:48px;height:48px">${initials(p.name)}</span>
+      <div class="grow">
+        <h1 class="h-screen" style="font-size:1.3rem">${esc(p.name)}</h1>
+        <p class="tiny muted">${p.age} años · ${esc(p.program)}</p>
+      </div>
+    </div>
+    <div class="row" style="gap:8px;margin:10px 0 16px">${phasePill(p.phase)}
+      <span class="pill" style="background:var(--surface-2);color:var(--muted)">${esc(p.condition)}</span></div>
+
+    ${chartCard(p)}
+
+    <button class="btn navy" data-act="new-task-for" data-patient="${p.id}" style="margin:16px 0">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      Asignar tarea a ${p.name.split(' ')[0]}
+    </button>
+
+    <p class="eyebrow" style="margin-bottom:8px">Tareas asignadas</p>
+    <div class="stack">
+      ${p.tasks.map(t=>taskCard(t,{clickable:false})).join('')}
+    </div>
+  </div></div>`;
+}
+
+function screenTherapistNewTask(){
+  const d=S.draft;
+  const opts=Object.entries(S.patients).map(([id,p])=>`<option value="${id}" ${d.patient===id?'selected':''}>${esc(p.name)}</option>`).join('');
+  return `<div class="view-inner"><div class="pad pad-b fade">
+    <button class="tiny muted" data-act="to-home" style="font-weight:600;margin-bottom:10px">← Cancelar</button>
+    <h1 class="h-screen">Nueva tarea de seguimiento</h1>
+    <p class="sub" style="margin-bottom:18px">Módulo de planeación · define qué debe registrar el paciente y con qué frecuencia.</p>
+
+    <div class="field">
+      <label for="f-patient">Paciente</label>
+      <select id="f-patient">${opts}</select>
+    </div>
+
+    <div class="field">
+      <label for="f-behavior">Conducta a observar</label>
+      <input id="f-behavior" type="text" value="${esc(d.behavior)}" placeholder="Ej.: Episodios de ansiedad en clase">
+      <span class="hint">Es la variable dependiente del diseño de caso único.</span>
+    </div>
+
+    <div class="field">
+      <label>Dimensión de medición</label>
+      <div class="chips" id="f-dim">
+        ${Object.entries(DIMENSIONS).map(([k,v])=>`<button type="button" class="chip" data-dim="${k}" aria-pressed="${d.dimension===k}">${v.label}</button>`).join('')}
+      </div>
+      <span class="hint" id="dimHint">${DIMENSIONS[d.dimension].hint} · se registra en ${DIMENSIONS[d.dimension].unit}.</span>
+    </div>
+
+    <div class="field">
+      <label>Frecuencia de registro</label>
+      <div class="chips" id="f-cad">
+        ${CADENCIAS.map(c=>`<button type="button" class="chip" data-cad="${c}" aria-pressed="${d.cadence===c}">${c}</button>`).join('')}
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Fase del caso único</label>
+      <div class="chips" id="f-phase">
+        <button type="button" class="chip" data-phase="linea_base" aria-pressed="${d.phase==='linea_base'}">Línea base</button>
+        <button type="button" class="chip" data-phase="intervencion" aria-pressed="${d.phase==='intervencion'}">Intervención</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="f-due">Fecha / hora límite</label>
+      <input id="f-due" type="text" value="${esc(d.due)}" placeholder="Ej.: Hoy 21:00 · Diario esta semana">
+    </div>
+
+    <div class="field">
+      <label for="f-instr">Indicaciones para el paciente</label>
+      <textarea id="f-instr" placeholder="Explica en lenguaje claro qué debe hacer y cuándo…">${esc(d.instructions)}</textarea>
+    </div>
+
+    <button class="btn navy" data-act="assign">Asignar tarea al paciente</button>
+    <p class="tiny muted" style="text-align:center;margin-top:10px" id="assignErr"></p>
+  </div></div>`;
+}
+
+function screenTherapistAssigned(){
+  const p=S.patients[S.draft.patient];
+  const t=p.tasks[p.tasks.length-1];
+  return `<div class="view-inner"><div class="pad pad-b fade" style="display:flex;flex-direction:column;min-height:100%">
+    <div style="text-align:center;margin:24px 0 14px">
+      <div class="success-check"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg></div>
+      <h2 class="h-screen" style="margin-top:14px">Tarea asignada</h2>
+      <p class="sub">Se agregó a la lista de <b>${esc(p.name)}</b> y recibirá una notificación.</p>
+    </div>
+
+    <div class="banner"><svg viewBox="0 0 24 24" fill="none" stroke="var(--violet)" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+      <div>Así se verá la tarea en la app del paciente:</div>
+    </div>
+    <div style="margin:14px 0 4px">${taskCard(t,{clickable:false})}</div>
+
+    <div class="card" style="margin-top:12px;background:var(--surface-2)">
+      <p class="eyebrow" style="margin-bottom:6px">Resumen de la asignación</p>
+      <p class="tiny"><b>Conducta:</b> ${esc(p.behavior)}</p>
+      <p class="tiny"><b>Dimensión:</b> ${DIMENSIONS[t.dimension].label} (${DIMENSIONS[t.dimension].unit})</p>
+      <p class="tiny"><b>Frecuencia:</b> ${esc(t.cadence)} · <b>Fase:</b> ${t.phase==='linea_base'?'Línea base':'Intervención'}</p>
+    </div>
+
+    <div style="flex:1"></div>
+    <button class="btn navy" data-act="view-patient" data-patient="${p.id}" style="margin-top:16px">Ver ficha de ${p.name.split(' ')[0]}</button>
+    <button class="btn secondary" data-act="preview-as-patient" data-patient="${p.id}" style="margin-top:10px">Previsualizar como paciente</button>
+  </div></div>`;
+}
+
+function screenTherapistProgress(){
+  const list=Object.values(S.patients);
+  return `<div class="view-inner"><div class="pad pad-b fade">
+    <h1 class="h-screen">Análisis de tendencias</h1>
+    <p class="sub" style="margin-bottom:16px">Módulo de seguimiento · evolución de cada caso en plano cartesiano.</p>
+    <div class="stack">
+      ${list.map(p=>`<div>
+        <div class="row" style="margin-bottom:8px">
+          <span class="avatar" style="background:${p.color};width:32px;height:32px;font-size:.8rem">${initials(p.name)}</span>
+          <b style="font-family:'Poppins';font-size:.95rem">${esc(p.name)}</b>
+        </div>
+        ${chartCard(p)}
+      </div>`).join('')}
+    </div>
+  </div></div>`;
+}
+
+/* ============ tab bar ============ */
+function tabIcon(name){
+  const p={
+    inicio:'<path d="M3 11l9-8 9 8v9a2 2 0 0 1-2 2h-4v-6h-6v6H5a2 2 0 0 1-2-2Z"/>',
+    progreso:'<path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6"/>',
+    perfil:'<circle cx="12" cy="8" r="4"/><path d="M5 21c0-4 3-6 7-6s7 2 7 6"/>',
+    pacientes:'<circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.5 2.7-5.5 6-5.5S15 16.5 15 20"/><path d="M16 7a3 3 0 0 1 0 6M22 20c0-2.6-1.5-4.3-3.5-5"/>',
+    nueva:'<path d="M12 5v14M5 12h14"/>',
+    analisis:'<path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6"/>'
+  };
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p[name]||''}</svg>`;
+}
+function renderTabs(){
+  const tb=document.getElementById('tabbar');
+  if(!S.role || S.screen==='login' || S.screen==='2fa'){ tb.hidden=true; return; }
+  tb.hidden=false;
+  let tabs;
+  if(S.role==='paciente'){
+    tabs=[['inicio','Inicio','patientHome'],['progreso','Progreso','patientProgress'],['perfil','Perfil','patientProfile']];
+  }else{
+    tabs=[['pacientes','Pacientes','therapistHome'],['nueva','Nueva tarea','therapistNewTask'],['analisis','Progreso','therapistProgress']];
+  }
+  const cur = ({patientHome:'inicio',patientTask:'inicio',patientDone:'inicio',patientProgress:'progreso',patientProfile:'perfil',
+    therapistHome:'pacientes',therapistPatient:'pacientes',therapistNewTask:'nueva',therapistAssigned:'nueva',therapistProgress:'analisis'})[S.screen];
+  tb.innerHTML=tabs.map(([k,label,scr])=>`<button data-tab="${scr}" data-k="${k}" aria-current="${cur===k}">
+    ${tabIcon(k)}<span>${label}</span></button>`).join('');
+  tb.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{
+    const scr=b.dataset.tab;
+    if(scr==='patientProfile'){ go('patientProfile'); }
+    else go(scr);
+  }));
+}
+
+function screenPatientProfile(){
+  const p=S.patients[S.me];
+  return `<div class="view-inner"><div class="pad pad-b fade">
+    <div style="text-align:center;margin:14px 0 18px">
+      <span class="avatar" style="background:${p.color};width:66px;height:66px;font-size:1.3rem;margin:0 auto">${initials(p.name)}</span>
+      <h1 class="h-screen" style="margin-top:12px">${esc(p.name)}</h1>
+      <p class="sub">${esc(p.program)}</p>
+    </div>
+    <div class="card stack">
+      <div class="between"><span class="tiny muted">Terapeuta</span><b class="tiny">José E. Patiño</b></div>
+      <div class="between"><span class="tiny muted">Condición en seguimiento</span><b class="tiny">${esc(p.condition)}</b></div>
+      <div class="between"><span class="tiny muted">Fase actual</span>${phasePill(p.phase)}</div>
+      <div class="between"><span class="tiny muted">Autenticación</span><b class="tiny" style="color:var(--good)">2FA activada ✓</b></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <p class="tiny muted">Tus datos de conducta son información clínica sensible. Solo tú y tu terapeuta asignado pueden verlos (Ley 1581/2012).</p>
+    </div>
+    <button class="btn secondary" data-act="logout" style="margin-top:16px">Cerrar sesión</button>
+  </div></div>`;
+}
+
+/* ============ render ============ */
+const SCREENS={
+  login:screenLogin,'2fa':screen2fa,
+  patientHome:screenPatientHome,patientTask:screenPatientTask,patientDone:screenPatientDone,
+  patientProgress:screenPatientProgress,patientProfile:screenPatientProfile,
+  therapistHome:screenTherapistHome,therapistPatient:screenTherapistPatient,
+  therapistNewTask:screenTherapistNewTask,therapistAssigned:screenTherapistAssigned,therapistProgress:screenTherapistProgress
+};
+const NOTES={
+  login:{t:'1 · Inicio de sesión',m:'Un solo login para los dos roles.',l:[
+    'Elige <b>Paciente</b> o <b>Terapeuta</b> — las credenciales se autocompletan.',
+    'Pulsa <b>Iniciar sesión</b> para pasar al segundo factor (2FA).',
+    'También puedes saltar con el conmutador de arriba.']},
+  '2fa':{t:'1 · Verificación 2FA',m:'Requisito de seguridad para datos clínicos.',l:[
+    'El código <span class="mono">304 917</span> viene precargado.',
+    'Pulsa <b>Verificar e ingresar</b> para llegar al home del rol.']},
+  patientHome:{t:'2 · Home del paciente',m:'Lo primero que ve Ana al entrar.',l:[
+    'Racha, registros de la semana y <b>tareas de hoy</b>.',
+    'Toca una tarea pendiente para abrir el formulario de registro.',
+    'Abajo, su gráfica de progreso (línea base vs. intervención).']},
+  patientTask:{t:'3 · El paciente llena una tarea',m:'Formulario que cambia según la dimensión.',l:[
+    'Arriba, las <b>indicaciones del terapeuta</b>.',
+    'Frecuencia → contador · Intensidad → escala 0–10 · Duración → minutos.',
+    'Nota opcional + <b>Guardar registro</b>.']},
+  patientDone:{t:'3 · Registro guardado',m:'Confirmación y realimentación visual.',l:[
+    'El valor registrado se muestra de vuelta al paciente.',
+    'Si la tarea alimenta la serie, aparece como <b>último punto</b> en la gráfica.']},
+  patientProgress:{t:'Paciente · Progreso',m:'Pestaña "Progreso" del paciente.',l:[
+    'La misma gráfica cartesiana más el historial de registros.']},
+  patientProfile:{t:'Paciente · Perfil',m:'Datos de la relación terapéutica y privacidad.',l:['Incluye "Cerrar sesión" (RF-22).']},
+  therapistHome:{t:'2 · Home del terapeuta',m:'Vista de cartera de pacientes.',l:[
+    'Lista de pacientes con su fase y tareas pendientes.',
+    'Botón <b>Asignar nueva tarea</b>.',
+    'Toca un paciente para ver su ficha y su gráfica.']},
+  therapistPatient:{t:'Terapeuta · Ficha del paciente',m:'Módulo de seguimiento por caso.',l:[
+    'Gráfica de tendencia del caso único.',
+    'Lista de tareas asignadas con su estado.']},
+  therapistNewTask:{t:'4 · Creación de la tarea (formulario)',m:'Módulo de planeación.',l:[
+    'Paciente, <b>conducta</b>, dimensión de medición, frecuencia y fase.',
+    'Indicaciones en lenguaje claro para el paciente.',
+    'Pulsa <b>Asignar tarea al paciente</b>.']},
+  therapistAssigned:{t:'4 · Cómo queda al asignarse',m:'Confirmación + previsualización.',l:[
+    'Se muestra <b>la tarjeta tal como la verá el paciente</b>.',
+    'Resumen de la asignación (conducta, dimensión, fase).',
+    'La tarea ya quedó en la lista real del paciente: cambia a la sesión paciente para verla.']},
+  therapistProgress:{t:'Terapeuta · Análisis',m:'Tendencias de todos los casos.',l:['Una gráfica cartesiana por paciente.']}
+};
+
+function render(){
+  applyTheme();
+  const v=document.getElementById('view');
+  v.innerHTML=(SCREENS[S.screen]||screenLogin)();
+  v.scrollTop=0;
+  renderTabs();
+  bind();
+  syncSeg();
+  const n=NOTES[S.screen]||NOTES.login;
+  document.getElementById('noteTitle').textContent=n.t;
+  document.getElementById('noteMeta').textContent=n.m;
+  document.getElementById('noteList').innerHTML=n.l.map(x=>`<li>${x}</li>`).join('');
+}
+
+/* ============ interacción ============ */
+let taskValue=0;
+function bind(){
+  const v=document.getElementById('view');
+
+  // login role
+  v.querySelectorAll('[data-role]').forEach(b=>b.addEventListener('click',()=>{
+    S.loginRole=b.dataset.role; save(); render();
+  }));
+
+  v.querySelectorAll('[data-act]').forEach(el=>{
+    el.addEventListener('click',()=>handleAct(el.dataset.act, el));
+  });
+
+  // task list (patient)
+  v.querySelectorAll('[data-task]').forEach(b=>b.addEventListener('click',()=>{
+    taskValue=0; go('patientTask',{activeTask:b.dataset.task});
+  }));
+
+  // patient list (therapist)
+  v.querySelectorAll('[data-patient]').forEach(b=>{
+    if(b.dataset.act) return;
+    b.addEventListener('click',()=>go('therapistPatient',{activePatient:b.dataset.patient}));
+  });
+
+  // stepper
+  v.querySelectorAll('[data-step]').forEach(b=>b.addEventListener('click',()=>{
+    taskValue=Math.max(0,taskValue+(+b.dataset.step));
+    document.getElementById('taskVal').textContent=taskValue;
+  }));
+  // scale
+  const sc=document.getElementById('scaleIn');
+  if(sc) sc.addEventListener('input',()=>document.getElementById('scaleOut').textContent=sc.value);
+
+  // otp autoadvance
+  v.querySelectorAll('.otp input').forEach((inp,i,arr)=>{
+    inp.addEventListener('input',()=>{ if(inp.value && arr[i+1]) arr[i+1].focus(); });
+  });
+
+  // form: new task
+  const fp=v.querySelector('#f-patient'); if(fp) fp.addEventListener('change',()=>{S.draft.patient=fp.value;save();});
+  const fb=v.querySelector('#f-behavior'); if(fb) fb.addEventListener('input',()=>{S.draft.behavior=fb.value;});
+  const fd=v.querySelector('#f-due'); if(fd) fd.addEventListener('input',()=>{S.draft.due=fd.value;});
+  const fi=v.querySelector('#f-instr'); if(fi) fi.addEventListener('input',()=>{S.draft.instructions=fi.value;});
+  v.querySelectorAll('#f-dim [data-dim]').forEach(b=>b.addEventListener('click',()=>{
+    S.draft.dimension=b.dataset.dim; save();
+    v.querySelectorAll('#f-dim [data-dim]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+    document.getElementById('dimHint').innerHTML=`${DIMENSIONS[b.dataset.dim].hint} · se registra en ${DIMENSIONS[b.dataset.dim].unit}.`;
+  }));
+  v.querySelectorAll('#f-cad [data-cad]').forEach(b=>b.addEventListener('click',()=>{
+    S.draft.cadence=b.dataset.cad; save();
+    v.querySelectorAll('#f-cad [data-cad]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+  }));
+  v.querySelectorAll('#f-phase [data-phase]').forEach(b=>b.addEventListener('click',()=>{
+    S.draft.phase=b.dataset.phase; save();
+    v.querySelectorAll('#f-phase [data-phase]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+  }));
+}
+
+function handleAct(act,el){
+  if(act==='login'){ go('2fa'); return; }
+  if(act==='back-login'){ go('login'); return; }
+  if(act==='verify'){
+    if(S.loginRole==='paciente'){ S.role='paciente'; S.me='ana'; S.activePatient='ana'; go('patientHome',{tab:'inicio'}); }
+    else { S.role='terapeuta'; go('therapistHome'); }
+    return;
+  }
+  if(act==='to-home'){ go(S.role==='paciente'?'patientHome':'therapistHome'); return; }
+  if(act==='logout'){ S.role=null; go('login'); return; }
+
+  if(act==='save-task'){
+    const p=S.patients[S.me]; const t=p.tasks.find(x=>x.id===S.activeTask);
+    let val;
+    if(t.dimension==='frecuencia') val=taskValue;
+    else if(t.dimension==='duracion') val=+(document.getElementById('taskValNum').value||0);
+    else val=+(document.getElementById('scaleIn').value);
+    const note=(document.getElementById('taskNote').value||'').trim();
+    t.status='completada';
+    t.entries.push({date:'Hoy',value:val,note});
+    if(t.feedsSeries) p.series.push(val);
+    go('patientDone');
+    return;
+  }
+
+  if(act==='new-task'){ S.draft=blankDraft(); go('therapistNewTask'); return; }
+  if(act==='new-task-for'){ S.draft=blankDraft(); S.draft.patient=el.dataset.patient; go('therapistNewTask'); return; }
+
+  if(act==='assign'){
+    const d=S.draft;
+    if(!d.behavior.trim() || !d.instructions.trim()){
+      document.getElementById('assignErr').textContent='Completa la conducta y las indicaciones para el paciente.';
+      return;
+    }
+    const p=S.patients[d.patient];
+    p.behavior=d.behavior.trim();
+    p.dimension=d.dimension;
+    p.phase=d.phase;
+    p.tasks.push({
+      id:'n'+Date.now(),
+      title:d.behavior.trim().length>42?d.behavior.trim().slice(0,40)+'…':d.behavior.trim(),
+      instructions:d.instructions.trim(),
+      dimension:d.dimension,
+      cadence:d.cadence,
+      due:d.due.trim()||'Sin fecha definida',
+      phase:d.phase,
+      status:'pendiente',
+      feedsSeries:true,
+      entries:[]
+    });
+    save();
+    go('therapistAssigned');
+    return;
+  }
+  if(act==='view-patient'){ go('therapistPatient',{activePatient:el.dataset.patient}); return; }
+  if(act==='preview-as-patient'){
+    S.role='paciente'; S.me=el.dataset.patient; S.activePatient=el.dataset.patient;
+    go('patientHome',{tab:'inicio'});
+    return;
+  }
+}
+
+/* clock */
+(function(){
+  const c=document.getElementById('clock');
+  const upd=()=>c.textContent=new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit',hour12:false});
+  upd(); setInterval(upd,30000);
+})();
+
+render();
+</script>
