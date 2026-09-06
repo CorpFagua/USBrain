@@ -17,19 +17,21 @@ Está implementado un **prototipo navegable** de los flujos principales, dentro 
 | Flujo | Pantallas |
 |---|---|
 | **Inicio de sesión (2 roles)** | Un login único → se elige **Paciente** o **Terapeuta** (credenciales autocompletadas) → **verificación 2FA** (código `304 917` precargado) → home del rol |
-| **Home del paciente** | Saludo, racha, registros de la semana, tareas de hoy y gráfica de progreso (línea base vs. intervención) |
-| **El paciente llena una tarea** | Se abren las indicaciones del terapeuta → el formulario cambia según la dimensión: **frecuencia** = contador, **intensidad** = escala 0–10, **duración** = minutos → nota opcional → *Guardar registro* → confirmación y el punto nuevo aparece en la gráfica |
-| **Home del terapeuta** | Cartera de pacientes con fase y pendientes; ficha individual con la gráfica del caso |
-| **Creación / asignación de tarea** | Formulario del *módulo de planeación*: paciente, conducta a observar, dimensión de medición, frecuencia de registro, fase del caso único, fecha límite e indicaciones |
-| **Cómo queda al asignarse** | Confirmación + **previsualización de la tarjeta tal como la verá el paciente** + resumen; la tarea queda en la lista real del paciente (botón *Previsualizar como paciente*) |
-| **Análisis de tendencias** | Una gráfica cartesiana por paciente (*módulo de seguimiento*) |
+| **Home del paciente** | Saludo, racha, registros de la semana, tareas agrupadas por conducta, clasificación de conductas (adaptativas/desadaptativas) y gráficas de progreso |
+| **El paciente llena una tarea** | Se abren las indicaciones del terapeuta → el formulario cambia según la dimensión: **frecuencia** = contador, **intensidad** = escala 0–10, **duración** = minutos → nota opcional → *Guardar registro* → confirmación y el punto nuevo aparece en la gráfica de la conducta |
+| **Home del terapeuta** | Cartera de pacientes con casos, conductas y tareas pendientes; detalle del caso con conductas, estado de línea base y progreso |
+| **Creación de conducta** | El terapeuta crea una conducta con nombre, definición operacional, clasificación (adaptativa/desadaptativa) y dimensión de medición. La conducta inicia automáticamente con línea base abierta |
+| **Revisión y cierre de línea base** | El terapeuta puede revisar el número de observaciones de línea base de cada conducta y cerrarla cuando corresponda. Al cerrar, los datos quedan fijos como referencia |
+| **Creación de tareas vinculadas** | Después de crear la conducta, el terapeuta puede crear tareas. La fase se asigna automáticamente según el estado de la línea base: línea base mientras esté abierta, intervención después de cerrarla |
+| **Asignación de tareas** | Confirmación + **previsualización de la tarjeta tal como la verá el paciente** + resumen de conducta, clasificación, fase, dimensión y tarea; la tarea queda en la lista real del paciente (botón *Previsualizar como paciente*) |
+| **Análisis de tendencias** | Gráficas cartesianas por conducta, separadas en conductas adaptativas y desadaptativas, con línea base como referencia fija y registros de intervención diferenciados |
 
 ### Datos de prueba
 
-- Paciente: `ana.torres@usbbog.edu.co` — Ana Torres, ansiedad social, fase intervención.
+- Paciente: `ana.torres@usbbog.edu.co` — Ana Torres, ansiedad social, caso único con conductas adaptativas y desadaptativas.
 - Terapeuta: `e.patino@usb.edu.co` — José E. Patiño.
 - Contraseña: cualquiera (precargada) · Código 2FA: `304 917` (precargado).
-- Segundo paciente de ejemplo: Daniel Ruiz, insomnio de conciliación, fase línea base.
+- Segundo paciente de ejemplo: Daniel Ruiz, insomnio de conciliación, con línea base abierta.
 
 ### Menú (arriba a la derecha)
 
@@ -40,8 +42,9 @@ Está implementado un **prototipo navegable** de los flujos principales, dentro 
 
 ### Recorrido sugerido para la sustentación
 
-Terapeuta → *Asignar nueva tarea* → llenar el formulario para Ana → ver la previsualización →
-*Previsualizar como paciente* → llenar esa tarea → ver el punto nuevo en la gráfica.
+**Terapeuta:** Ir a sesión terapeuta → seleccionar consultante → *Nueva conducta* (crear una adaptativa y otra desadaptativa) → guardar → revisar línea base (observaciones) → *Cerrar línea base* → *Nueva tarea* (verá que la fase cambió automáticamente a intervención) → asignar → ver previsualización → *Previsualizar como paciente* → llenar esa tarea → *Ver progreso* (muestra conductas separadas por clasificación, con línea base como zona fija).
+
+**Resultado:** Las gráficas de progreso mostrarán conductas adaptativas y desadaptativas por separado, la línea base aparecerá como una zona o referencia fija con su contador de observaciones, y los registros de intervención se graficarán en el eje temporal sin contaminar la línea base cerrada.
 
 ---
 

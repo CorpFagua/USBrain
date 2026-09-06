@@ -35,6 +35,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -98,6 +99,7 @@ fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit
                 Screen.PATIENT_PROFILE -> PatientProfileScreen(state)
                 Screen.THERAPIST_HOME -> TherapistHomeScreen(state)
                 Screen.THERAPIST_PATIENT -> TherapistPatientScreen(state)
+                Screen.THERAPIST_NEW_BEHAVIOR -> TherapistNewBehaviorScreen(state)
                 Screen.THERAPIST_NEW_TASK -> TherapistNewTaskScreen(state)
                 Screen.THERAPIST_ASSIGNED -> TherapistAssignedScreen(state)
                 Screen.THERAPIST_PROGRESS -> TherapistProgressScreen(state)
@@ -110,7 +112,7 @@ private fun showsBottomBar(state: PrototypeState): Boolean {
     if (state.role == null) return false
     return state.screen !in listOf(
         Screen.LOGIN, Screen.TWO_FACTOR, Screen.PATIENT_TASK, Screen.PATIENT_DONE,
-        Screen.THERAPIST_NEW_TASK, Screen.THERAPIST_ASSIGNED,
+        Screen.THERAPIST_NEW_BEHAVIOR, Screen.THERAPIST_NEW_TASK, Screen.THERAPIST_ASSIGNED,
     )
 }
 
@@ -188,7 +190,6 @@ private fun BottomBar(state: PrototypeState) {
     } else {
         listOf(
             Triple(Screen.THERAPIST_HOME, "Pacientes", "person"),
-            Triple(Screen.THERAPIST_NEW_TASK, "Nueva tarea", "plus"),
             Triple(Screen.THERAPIST_PROGRESS, "Progreso", "chart"),
         )
     }
@@ -197,13 +198,10 @@ private fun BottomBar(state: PrototypeState) {
         items.forEach { (target, label, glyph) ->
             val selected = current == target ||
                 (target == Screen.PATIENT_HOME && current in listOf(Screen.PATIENT_TASK, Screen.PATIENT_DONE)) ||
-                (target == Screen.THERAPIST_HOME && current == Screen.THERAPIST_PATIENT) ||
-                (target == Screen.THERAPIST_NEW_TASK && current == Screen.THERAPIST_ASSIGNED)
+                (target == Screen.THERAPIST_HOME && current == Screen.THERAPIST_PATIENT)
             NavigationBarItem(
                 selected = selected,
-                onClick = {
-                    if (target == Screen.THERAPIST_NEW_TASK) state.startNewTask(null) else state.screen = target
-                },
+                onClick = { state.screen = target },
                 icon = { NavGlyph(glyph, selected) },
                 label = { Text(label) },
             )
@@ -223,7 +221,7 @@ private fun ScreenScaffold(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun SectionLabel(text: String, modifier: Modifier = Modifier) {
+private fun SectionLabel(text: String, modifier: Modifier = Modifier, maxLines: Int = Int.MAX_VALUE, overflow: TextOverflow = TextOverflow.Clip) {
     Text(
         text.uppercase(),
         modifier = modifier,
@@ -231,6 +229,8 @@ private fun SectionLabel(text: String, modifier: Modifier = Modifier) {
         fontWeight = FontWeight.SemiBold,
         letterSpacing = 1.4.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = maxLines,
+        overflow = overflow,
     )
 }
 
@@ -247,7 +247,33 @@ private fun FieldLabel(text: String) {
 @Composable
 private fun Pill(text: String, container: Color, content: Color) {
     Box(Modifier.clip(RoundedCornerShape(50)).background(container).padding(horizontal = 10.dp, vertical = 4.dp)) {
-        Text(text, color = content, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.2.sp)
+        // maxLines=1 evita que un pill se "rompa" a dos líneas si el contenedor lo exprime.
+        Text(text, color = content, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.2.sp, maxLines = 1, overflow = TextOverflow.Clip, softWrap = false)
+    }
+}
+
+/** Desplegable simple: botón con la selección actual + menú. `options` es lista de (id, etiqueta). */
+@Composable
+private fun DropdownField(
+    label: String,
+    selectedLabel: String?,
+    placeholder: String,
+    options: List<Pair<String, String>>,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column {
+        FieldLabel(label)
+        Box {
+            OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(selectedLabel ?: placeholder, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEach { (id, optionLabel) ->
+                    DropdownMenuItem(text = { Text(optionLabel) }, onClick = { onSelect(id); expanded = false })
+                }
+            }
+        }
     }
 }
 
@@ -305,6 +331,16 @@ private fun unitShort(d: Dimension): String = when (d) {
     Dimension.FRECUENCIA -> "episodios"
 }
 
+// Registro autónomo mide la dimensión de la conducta; el resto de tipos usa su propia unidad_metrica.
+private fun taskUnitLabel(task: TrackTask): String = if (task.taskType == TaskType.REGISTRO_AUTONOMO) {
+    unitShort(task.dimension)
+} else when (task.metricUnit) {
+    MetricUnit.MINUTOS -> "min"
+    MetricUnit.REPETICIONES -> "rep"
+    MetricUnit.ESCALA_1_5 -> "/5"
+    MetricUnit.SOLO_COMPLETADO, null -> ""
+}
+
 private fun axisUnit(d: Dimension): String = when (d) {
     Dimension.INTENSIDAD -> "malestar 0–10"
     Dimension.DURACION -> "minutos"
@@ -321,7 +357,8 @@ private fun TaskCard(task: TrackTask, onClick: (() -> Unit)? = null) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SectionLabel("${task.cadence} · ${task.dimension.label}")
+            val measure = if (task.taskType == TaskType.REGISTRO_AUTONOMO) task.dimension.label else task.metricUnit?.label.orEmpty()
+            SectionLabel("${task.taskType.label} · $measure", modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             StatusPill(task.status)
         }
         Spacer(Modifier.height(8.dp))
@@ -337,14 +374,19 @@ private fun TaskCard(task: TrackTask, onClick: (() -> Unit)? = null) {
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
-                "Entrega · ${task.due}",
+                task.dueDate?.let { "Vence · $it" } ?: "Sin fecha límite",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (task.status == TaskStatus.COMPLETADA) {
                 val last = task.entries.lastOrNull()
+                val completedLabel = if (task.taskType != TaskType.REGISTRO_AUTONOMO && task.metricUnit == MetricUnit.SOLO_COMPLETADO) {
+                    "✓ Completada"
+                } else {
+                    "✓ " + (last?.let { "${fmt(it.value)} ${taskUnitLabel(task)}" } ?: "registrada")
+                }
                 Text(
-                    "✓ " + (last?.let { "${fmt(it.value)} ${unitShort(task.dimension)}" } ?: "registrada"),
+                    completedLabel,
                     style = MaterialTheme.typography.labelSmall,
                     color = s.success,
                     fontWeight = FontWeight.SemiBold,
@@ -371,7 +413,7 @@ private fun TaskCard(task: TrackTask, onClick: (() -> Unit)? = null) {
 }
 
 @Composable
-private fun TrendChart(patient: Patient, modifier: Modifier = Modifier) {
+private fun TrendChart(behavior: Behavior, modifier: Modifier = Modifier) {
     val s = LocalUsBrainSemantic.current
     val measurer = rememberTextMeasurer()
     val axisColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -379,8 +421,10 @@ private fun TrendChart(patient: Patient, modifier: Modifier = Modifier) {
     val gridColor = s.grid
     val baseC = s.baseline
     val intC = s.intervention
-    val data = patient.series.toList()
-    val baselineDays = patient.baselineDays
+    val baseline = behavior.baselineEntries.map { it.value }
+    val intervention = behavior.tasks.filter { it.taskType == TaskType.REGISTRO_AUTONOMO }.flatMap { task -> task.entries.filter { it.phase == Phase.INTERVENCION }.map { it.value } }
+    val data = baseline + intervention
+    val baselineDays = baseline.size
     Canvas(modifier.fillMaxWidth().height(150.dp)) {
         if (data.isEmpty()) return@Canvas
         val n = data.size
@@ -399,7 +443,7 @@ private fun TrendChart(patient: Patient, modifier: Modifier = Modifier) {
         }
         if (baselineDays in 1 until n) {
             val splitX = (xAt(baselineDays - 1) + xAt(baselineDays)) / 2f
-            drawRect(baseC.copy(alpha = 0.07f), Offset(padL, padT), Size(splitX - padL, ih))
+            drawRect(baseC.copy(alpha = 0.14f), Offset(padL, padT), Size(splitX - padL, ih))
             drawLine(
                 intC, Offset(splitX, padT), Offset(splitX, padT + ih), 1.5f,
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f)),
@@ -426,7 +470,7 @@ private fun TrendChart(patient: Patient, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ChartCard(patient: Patient) {
+private fun ChartCard(behavior: Behavior) {
     val s = LocalUsBrainSemantic.current
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
@@ -437,33 +481,38 @@ private fun ChartCard(patient: Patient) {
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        patient.behavior,
+                        behavior.name,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        "Tendencia · ${patient.dimension.label}",
+                        "Tendencia · ${behavior.dimension.label} · ${behavior.type.label}",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-                PhasePill(patient.phase)
+                PhasePill(if (behavior.baselineOpen) Phase.LINEA_BASE else Phase.INTERVENCION)
             }
             Spacer(Modifier.height(10.dp))
-            TrendChart(patient)
+            TrendChart(behavior)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                LegendDot(s.baseline, "Línea base (${patient.baselineDays} d)")
+                LegendDot(s.baseline, "Línea base (${behavior.observationCount} obs.)")
                 LegendDot(s.intervention, "Intervención")
             }
             Text(
-                "Eje X: días · Eje Y: ${axisUnit(patient.dimension)}",
+                "Eje X: observaciones · Eje Y: ${axisUnit(behavior.dimension)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
     }
+}
+
+@Composable
+private fun ChartCard(patient: Patient) {
+    patient.behaviors.forEach { behavior -> ChartCard(behavior) }
 }
 
 @Composable
@@ -639,7 +688,8 @@ private fun TwoFactorScreen(state: PrototypeState) {
 @Composable
 private fun PatientHomeScreen(state: PrototypeState) {
     val p = state.me()
-    val pending = p.tasks.filter { it.status == TaskStatus.PENDIENTE }
+    val caseId = state.caseForPatient(p.id)
+    val behaviors = if (caseId != null) state.behaviorsForCase(caseId) else emptyList()
     val done = p.tasks.filter { it.status == TaskStatus.COMPLETADA }
     ScreenScaffold {
         Row(
@@ -653,6 +703,7 @@ private fun PatientHomeScreen(state: PrototypeState) {
             }
             Avatar(p)
         }
+        val pending = behaviors.flatMap { b -> state.tasksForBehavior(b.id).filter { it.status == TaskStatus.PENDIENTE } }
         Text(
             "Tienes ${pending.size} ${if (pending.size == 1) "tarea" else "tareas"} por registrar.",
             style = MaterialTheme.typography.bodyMedium,
@@ -660,24 +711,35 @@ private fun PatientHomeScreen(state: PrototypeState) {
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatTile("${3 + done.size}", "días de racha", MaterialTheme.colorScheme.primary)
-            StatTile("${done.size}/${p.tasks.size}", "registros esta semana", MaterialTheme.colorScheme.onSurface)
+            StatTile("${done.size}/${behaviors.sumOf { state.tasksForBehavior(it.id).size }}", "registros esta semana", MaterialTheme.colorScheme.onSurface)
         }
-        SectionLabel("Tus tareas de hoy")
-        if (pending.isEmpty()) {
+        if (behaviors.isEmpty()) {
             Text(
-                "Todo al día. Vuelve más tarde para tu próximo registro.",
+                "Tu terapeuta aún no ha creado conductas para tu caso.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            pending.forEach { t -> TaskCard(t) { state.openTask(t.id) } }
-        }
-        if (done.isNotEmpty()) {
-            SectionLabel("Ya registradas")
-            done.forEach { t -> TaskCard(t) }
+            behaviors.forEach { b ->
+                val behaviorPending = state.tasksForBehavior(b.id).filter { it.status == TaskStatus.PENDIENTE }
+                val behaviorDone = state.tasksForBehavior(b.id).filter { it.status == TaskStatus.COMPLETADA }
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SectionLabel("${b.name}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Pill(if (b.type == BehaviorType.ADAPTATIVA) "Adaptativa" else "Desadaptativa", MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
+                        Pill(b.dimension.label, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (behaviorPending.isNotEmpty()) {
+                        behaviorPending.forEach { t -> TaskCard(t) { state.openTask(t.id) } }
+                    }
+                    if (behaviorDone.isNotEmpty()) {
+                        behaviorDone.forEach { t -> TaskCard(t) }
+                    }
+                }
+            }
         }
         SectionLabel("Tu progreso")
-        ChartCard(p)
+        behaviors.forEach { b -> ChartCard(state.progressForBehavior(b)) }
         Text(
             "Cada tarea que registras agrega un punto a esta gráfica. Tu terapeuta la revisa antes de cada sesión.",
             style = MaterialTheme.typography.labelSmall,
@@ -701,69 +763,56 @@ private fun PatientTaskScreen(state: PrototypeState) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    SectionLabel("Indicaciones del terapeuta")
+                    SectionLabel("Indicaciones del terapeuta", modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     PhasePill(t.phase)
                 }
                 Text(t.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Text(t.instructions, style = MaterialTheme.typography.bodyMedium)
+                val measureLabel = if (t.taskType == TaskType.REGISTRO_AUTONOMO) "${t.dimension.label} (${t.dimension.unit})" else t.metricUnit?.label.orEmpty()
                 Text(
-                    "Medición: ${t.dimension.label} (${t.dimension.unit}) · ${t.cadence} · Entrega: ${t.due}",
+                    "${t.taskType.label} · Medición: $measureLabel" + (t.dueDate?.let { " · Vence: $it" } ?: ""),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
-        Text(t.dimension.hint, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        val hint = if (t.taskType == TaskType.REGISTRO_AUTONOMO) t.dimension.hint else when (t.metricUnit) {
+            MetricUnit.SOLO_COMPLETADO -> "Marca esta actividad como completada."
+            MetricUnit.MINUTOS -> "¿Cuántos minutos dedicaste?"
+            MetricUnit.REPETICIONES -> "¿Cuántas repeticiones hiciste?"
+            MetricUnit.ESCALA_1_5 -> "¿Cómo te fue? Escala de 1 a 5"
+            null -> ""
+        }
+        Text(hint, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(
                 Modifier.fillMaxWidth().padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                when (t.dimension) {
-                    Dimension.FRECUENCIA -> Stepper(state.taskInputValue.toInt()) {
-                        state.taskInputValue = it.coerceAtLeast(0).toDouble()
-                    }
-                    Dimension.DURACION -> {
-                        val txt = remember { mutableStateOf(if (state.taskInputValue > 0) fmt(state.taskInputValue) else "") }
-                        OutlinedTextField(
-                            txt.value,
-                            { v ->
-                                val digits = v.filter { it.isDigit() }.take(4)
-                                txt.value = digits
-                                state.taskInputValue = digits.toDoubleOrNull() ?: 0.0
-                            },
-                            Modifier.fillMaxWidth(),
-                            label = { Text("Minutos") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        )
-                    }
-                    Dimension.INTENSIDAD -> {
-                        Text(
-                            "${state.taskInputValue.toInt()}",
-                            style = MaterialTheme.typography.displaySmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Slider(
-                            value = state.taskInputValue.toFloat(),
-                            onValueChange = { state.taskInputValue = it.toDouble() },
-                            valueRange = 0f..10f,
-                            steps = 9,
-                        )
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(
-                                "0 · nada",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                "10 · máximo",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                // Registro autónomo mide la conducta (dimensión); el resto usa su propia unidad_metrica.
+                if (t.taskType == TaskType.REGISTRO_AUTONOMO) {
+                    when (t.dimension) {
+                        Dimension.FRECUENCIA -> Stepper(state.taskInputValue.toInt()) {
+                            state.taskInputValue = it.coerceAtLeast(0).toDouble()
                         }
+                        Dimension.DURACION -> MinutesField(state)
+                        Dimension.INTENSIDAD -> ScaleSlider(state, 0f, 10f, 9, "0 · nada", "10 · máximo")
+                    }
+                } else {
+                    when (t.metricUnit) {
+                        MetricUnit.SOLO_COMPLETADO -> Text(
+                            "Esta actividad se marca como completada al guardar, sin valor numérico.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        MetricUnit.MINUTOS -> MinutesField(state)
+                        MetricUnit.REPETICIONES -> Stepper(state.taskInputValue.toInt()) {
+                            state.taskInputValue = it.coerceAtLeast(0).toDouble()
+                        }
+                        MetricUnit.ESCALA_1_5 -> ScaleSlider(state, 1f, 5f, 3, "1 · bajo", "5 · alto")
+                        null -> {}
                     }
                 }
             }
@@ -811,6 +860,43 @@ private fun Stepper(value: Int, onChange: (Int) -> Unit) {
 }
 
 @Composable
+private fun MinutesField(state: PrototypeState) {
+    val txt = remember { mutableStateOf(if (state.taskInputValue > 0) fmt(state.taskInputValue) else "") }
+    OutlinedTextField(
+        txt.value,
+        { v ->
+            val digits = v.filter { it.isDigit() }.take(4)
+            txt.value = digits
+            state.taskInputValue = digits.toDoubleOrNull() ?: 0.0
+        },
+        Modifier.fillMaxWidth(),
+        label = { Text("Minutos") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+    )
+}
+
+@Composable
+private fun ScaleSlider(state: PrototypeState, min: Float, max: Float, steps: Int, minLabel: String, maxLabel: String) {
+    Text(
+        "${state.taskInputValue.toInt()}",
+        style = MaterialTheme.typography.displaySmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.primary,
+    )
+    Slider(
+        value = state.taskInputValue.toFloat().coerceIn(min, max),
+        onValueChange = { state.taskInputValue = it.toDouble() },
+        valueRange = min..max,
+        steps = steps,
+    )
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(minLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(maxLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
 private fun PatientDoneScreen(state: PrototypeState) {
     val p = state.me()
     val t = state.activeTask()
@@ -844,8 +930,13 @@ private fun PatientDoneScreen(state: PrototypeState) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
+                val summary = if (t.taskType != TaskType.REGISTRO_AUTONOMO && t.metricUnit == MetricUnit.SOLO_COMPLETADO) {
+                    "Completada"
+                } else {
+                    "${fmt(entry.value)} ${taskUnitLabel(t)}"
+                }
                 Text(
-                    "${fmt(entry.value)} ${unitShort(t.dimension)}",
+                    summary,
                     style = MaterialTheme.typography.displaySmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
@@ -881,55 +972,25 @@ private fun PatientDoneScreen(state: PrototypeState) {
 @Composable
 private fun PatientProgressScreen(state: PrototypeState) {
     val p = state.me()
-    val entries = p.tasks.flatMap { t -> t.entries.map { e -> t to e } }.asReversed()
+    val behaviors = state.behaviorsFor(p.id)
+    val adaptive = behaviors.filter { it.type == BehaviorType.ADAPTATIVA }
+    val maladaptive = behaviors.filter { it.type == BehaviorType.DESADAPTATIVA }
     ScreenScaffold {
-        SectionLabel(p.condition)
         Text("Mi progreso", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text(
-            "Conducta observada: ${p.behavior}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        ChartCard(p)
-        SectionLabel("Mis registros recientes")
-        if (entries.isEmpty()) {
+        if (behaviors.isEmpty()) {
             Text(
-                "Aún no tienes registros.",
+                "Tu terapeuta aún no ha creado conductas para tu caso.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            entries.forEach { (t, e) ->
-                OutlinedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(
-                                t.title,
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(
-                                "${fmt(e.value)} ${unitShort(t.dimension)}",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                        Text(
-                            e.date,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        if (e.note.isNotBlank()) {
-                            Text(
-                                "“${e.note}”",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontStyle = FontStyle.Italic,
-                            )
-                        }
-                    }
-                }
+            if (adaptive.isNotEmpty()) {
+                SectionLabel("Conductas adaptativas")
+                adaptive.forEach { b -> ChartCard(state.progressForBehavior(b)) }
+            }
+            if (maladaptive.isNotEmpty()) {
+                SectionLabel("Conductas desadaptativas")
+                maladaptive.forEach { b -> ChartCard(state.progressForBehavior(b)) }
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -1011,9 +1072,6 @@ private fun TherapistHomeScreen(state: PrototypeState) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Button(onClick = { state.startNewTask(null) }, Modifier.fillMaxWidth().height(50.dp)) {
-            Text("Asignar nueva tarea")
-        }
         SectionLabel("Mis pacientes")
         patients.forEach { p -> PatientRow(p) { state.openPatient(p.id) } }
         Spacer(Modifier.height(24.dp))
@@ -1070,16 +1128,142 @@ private fun TherapistPatientScreen(state: PrototypeState) {
                 )
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PhasePill(p.phase)
             Pill(p.condition, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        ChartCard(p)
-        Button(onClick = { state.startNewTask(p.id) }, Modifier.fillMaxWidth().height(50.dp)) {
-            Text("Asignar tarea a ${p.firstName}")
+        Button(onClick = { state.startNewBehavior(p.id) }, Modifier.fillMaxWidth().height(50.dp)) {
+            Text("Nueva conducta")
         }
-        SectionLabel("Tareas asignadas")
-        p.tasks.forEach { t -> TaskCard(t) }
+        SectionLabel("Conductas del caso")
+        p.behaviors.forEach { behavior ->
+            OutlinedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column(Modifier.weight(1f)) {
+                            Text(behavior.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            Text(behavior.type.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        PhasePill(if (behavior.baselineOpen) Phase.LINEA_BASE else Phase.INTERVENCION)
+                    }
+                    Text("${behavior.observationCount} observaciones de línea base · ${behavior.dimension.label}", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        if (behavior.baselineOpen) "Línea base abierta: las nuevas tareas registrarán observaciones iniciales."
+                        else "Línea base cerrada el ${behavior.baselineClosedOn}: los datos quedan como referencia fija.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (behavior.baselineOpen) {
+                        OutlinedButton(onClick = { state.closeBaseline(behavior.id) }, Modifier.fillMaxWidth()) {
+                            Text("Cerrar línea base")
+                        }
+                    }
+                    Button(onClick = { state.startNewTask(p.id, behavior.id) }, Modifier.fillMaxWidth()) {
+                        Text("Nueva tarea para esta conducta")
+                    }
+                    behavior.tasks.forEach { task -> TaskCard(task) }
+                }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun TherapistNewBehaviorScreen(state: PrototypeState) {
+    ScreenScaffold {
+        TextButton(onClick = { state.screen = Screen.THERAPIST_HOME }, contentPadding = PaddingValues(0.dp)) {
+            Text("← Cancelar")
+        }
+        Text("Nueva conducta", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(
+            "Primero define la conducta del caso. Después podrás revisar su línea base y asignar tareas.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Column {
+            FieldLabel("Consultante")
+            // Fijo por contexto: la conducta se crea siempre dentro de la historia de un paciente, no se puede cambiar aquí.
+            val patient = state.patient(state.draftPatientId)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Avatar(patient, 36.dp)
+                Column {
+                    Text(patient.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                    Text(patient.condition, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        Column {
+            FieldLabel("Nombre de la conducta")
+            OutlinedTextField(state.draftBehaviorName, { state.draftBehaviorName = it }, Modifier.fillMaxWidth(), placeholder = { Text("Ej.: Participar en clase a pesar de la ansiedad") }, singleLine = true)
+        }
+        Column {
+            FieldLabel("Definición operacional")
+            OutlinedTextField(state.draftDefinition, { state.draftDefinition = it }, Modifier.fillMaxWidth(), placeholder = { Text("Describe cuándo se considera observada: observable y medible, sin interpretación") }, minLines = 3)
+        }
+        Column {
+            FieldLabel("Naturaleza")
+            val s = LocalUsBrainSemantic.current
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BehaviorType.entries.forEach { type ->
+                    val tint = if (type == BehaviorType.ADAPTATIVA) s.success else MaterialTheme.colorScheme.error
+                    FilterChip(
+                        selected = state.draftBehaviorType == type,
+                        onClick = {
+                            state.draftBehaviorType = type
+                            if (type == BehaviorType.ADAPTATIVA) {
+                                state.draftBehavioralFunction = BehavioralFunction.NO_APLICA
+                                state.draftReplacementBehaviorId = null
+                            }
+                        },
+                        label = { Text(type.label) },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = tint.copy(alpha = 0.18f), selectedLabelColor = tint),
+                    )
+                }
+            }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            DropdownField(
+                label = "Categoría",
+                selectedLabel = state.categories.firstOrNull { it.id == state.draftCategoryId }?.name,
+                placeholder = "Selecciona una categoría",
+                options = state.categories.map { it.id to it.name } + ("__new__" to "+ Crear categoría nueva"),
+                onSelect = { id -> if (id == "__new__") state.showNewCategoryForm = true else { state.draftCategoryId = id; state.showNewCategoryForm = false } },
+            )
+            if (state.showNewCategoryForm) {
+                OutlinedTextField(state.draftNewCategoryName, { state.draftNewCategoryName = it }, Modifier.fillMaxWidth(), placeholder = { Text("Nombre de la categoría") }, singleLine = true)
+                OutlinedTextField(state.draftNewCategoryDomain, { state.draftNewCategoryDomain = it }, Modifier.fillMaxWidth(), placeholder = { Text("Dominio (ej.: Autorregulación emocional)") }, singleLine = true)
+                Button(onClick = {
+                    val id = state.createCategory(state.draftNewCategoryName, state.draftNewCategoryDomain)
+                    if (id != null) {
+                        state.draftCategoryId = id
+                        state.showNewCategoryForm = false
+                        state.draftNewCategoryName = ""
+                        state.draftNewCategoryDomain = ""
+                    }
+                }) { Text("Guardar categoría") }
+            }
+        }
+        if (state.draftBehaviorType == BehaviorType.DESADAPTATIVA) {
+            Column {
+                FieldLabel("Función conductual")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BehavioralFunction.entries.forEach { fn ->
+                        FilterChip(state.draftBehavioralFunction == fn, { state.draftBehavioralFunction = fn }, label = { Text(fn.label) })
+                    }
+                }
+            }
+            val replacementOptions = state.adaptiveBehaviorsFor(state.draftPatientId)
+            DropdownField(
+                label = "Conducta que reemplaza",
+                selectedLabel = replacementOptions.firstOrNull { it.id == state.draftReplacementBehaviorId }?.name,
+                placeholder = if (replacementOptions.isEmpty()) "Aún no hay conductas adaptativas para este paciente" else "Ninguna por ahora",
+                options = listOf("" to "Ninguna por ahora") + replacementOptions.map { it.id to it.name },
+                onSelect = { id -> state.draftReplacementBehaviorId = id.ifBlank { null } },
+            )
+        }
+        state.behaviorError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        Button(onClick = { state.saveBehavior() }, Modifier.fillMaxWidth().height(50.dp)) { Text("Guardar conducta") }
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -1090,108 +1274,124 @@ private fun TherapistNewTaskScreen(state: PrototypeState) {
         TextButton(onClick = { state.screen = Screen.THERAPIST_HOME }, contentPadding = PaddingValues(0.dp)) {
             Text("← Cancelar")
         }
-        Text("Nueva tarea de seguimiento", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text("Nueva actividad", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(
-            "Módulo de planeación · define qué debe registrar el paciente y con qué frecuencia.",
+            "Se agrega sobre la conducta actual; puedes crear las actividades que necesites.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-
         Column {
-            FieldLabel("Paciente")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.patients.forEach { p ->
-                    FilterChip(
-                        selected = state.draftPatientId == p.id,
-                        onClick = { state.draftPatientId = p.id },
-                        label = { Text(p.name) },
-                    )
+            FieldLabel("Conducta")
+            // Fijo por contexto: la actividad se crea siempre dentro de una conducta, no se puede cambiar aquí.
+            val patient = state.patient(state.draftPatientId)
+            val behavior = state.behavior(state.draftBehaviorId!!)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Avatar(patient, 36.dp)
+                Column {
+                    Text(behavior.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                    Text("${patient.name} · ${behavior.type.label}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
         Column {
-            FieldLabel("Conducta a observar")
-            OutlinedTextField(
-                state.draftBehavior,
-                { state.draftBehavior = it },
-                Modifier.fillMaxWidth(),
-                placeholder = { Text("Ej.: Episodios de ansiedad en clase") },
-                singleLine = true,
-            )
-            Text(
-                "Es la variable dependiente del diseño de caso único.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-        Column {
-            FieldLabel("Dimensión de medición")
+            FieldLabel("Fase de la actividad")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Dimension.entries.forEach { d ->
+                Phase.entries.forEach { phase ->
                     FilterChip(
-                        selected = state.draftDimension == d,
-                        onClick = { state.draftDimension = d },
-                        label = { Text(d.label) },
-                    )
-                }
-            }
-            Text(
-                "${state.draftDimension.hint} · se registra en ${state.draftDimension.unit}.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-        Column {
-            FieldLabel("Frecuencia de registro")
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CADENCES.forEach { c ->
-                    FilterChip(
-                        selected = state.draftCadence == c,
-                        onClick = { state.draftCadence = c },
-                        label = { Text(c) },
+                        selected = state.draftTaskPhase == phase,
+                        onClick = {
+                            state.draftTaskPhase = phase
+                            state.draftReminderActive = phase == Phase.INTERVENCION
+                        },
+                        label = { Text(phase.label) },
                     )
                 }
             }
         }
         Column {
-            FieldLabel("Fase del caso único")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Phase.entries.forEach { ph ->
-                    FilterChip(
-                        selected = state.draftPhase == ph,
-                        onClick = { state.draftPhase = ph },
-                        label = { Text(ph.label) },
-                    )
-                }
-            }
+            FieldLabel("Nombre de la actividad")
+            OutlinedTextField(state.draftTaskTitle, { state.draftTaskTitle = it }, Modifier.fillMaxWidth(), placeholder = { Text("Ej.: Registrar cada episodio de rascado") }, singleLine = true)
         }
         Column {
-            FieldLabel("Fecha / hora límite")
-            OutlinedTextField(
-                state.draftDue,
-                { state.draftDue = it },
-                Modifier.fillMaxWidth(),
-                placeholder = { Text("Ej.: Hoy 21:00 · Diario esta semana") },
-                singleLine = true,
-            )
-        }
-        Column {
-            FieldLabel("Indicaciones para el paciente")
+            FieldLabel("Instrucciones")
             OutlinedTextField(
                 state.draftInstructions,
                 { state.draftInstructions = it },
                 Modifier.fillMaxWidth(),
-                placeholder = { Text("Explica en lenguaje claro qué debe hacer y cuándo…") },
+                placeholder = { Text("Qué debe hacer o anotar el paciente, y cómo…") },
                 minLines = 3,
             )
+        }
+        Column {
+            FieldLabel("Tipo de actividad")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TaskType.entries.forEach { type ->
+                    FilterChip(state.draftTaskType == type, { state.draftTaskType = type }, label = { Text(type.label) })
+                }
+            }
+        }
+        if (state.draftTaskType == TaskType.REGISTRO_AUTONOMO) {
+            Column {
+                FieldLabel("Tipo de medición")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Dimension.entries.forEach { dimension ->
+                        FilterChip(state.draftTaskDimension == dimension, { state.draftTaskDimension = dimension }, label = { Text(dimension.label) })
+                    }
+                }
+            }
+        } else {
+            Column {
+                FieldLabel("Cómo se mide cumplirla")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MetricUnit.entries.forEach { unit ->
+                        FilterChip(state.draftMetricUnit == unit, { state.draftMetricUnit = unit }, label = { Text(unit.label) })
+                    }
+                }
+            }
+        }
+        Column {
+            FieldLabel("Fecha de inicio")
+            OutlinedTextField(state.draftAssignedDate, { state.draftAssignedDate = it }, Modifier.fillMaxWidth(), placeholder = { Text("Hoy") }, singleLine = true)
+        }
+        Column {
+            FieldLabel("¿Se repite?")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(!state.draftIsRecurring, { state.draftIsRecurring = false }, label = { Text("Una sola vez") })
+                FilterChip(state.draftIsRecurring, { state.draftIsRecurring = true }, label = { Text("Recurrente") })
+            }
+        }
+        if (state.draftIsRecurring) {
+            Column {
+                FieldLabel("Frecuencia")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FRECUENCIAS.forEach { f ->
+                        FilterChip(state.draftFrequency == f, { state.draftFrequency = f }, label = { Text(f) })
+                    }
+                }
+            }
+        }
+        Column {
+            FieldLabel("Hasta cuándo (opcional)")
+            OutlinedTextField(
+                state.draftDueDate,
+                { state.draftDueDate = it },
+                Modifier.fillMaxWidth(),
+                placeholder = { Text("Vacío = sin fecha de cierre") },
+                singleLine = true,
+            )
+        }
+        Column {
+            FieldLabel("Recordatorio")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(!state.draftReminderActive, { state.draftReminderActive = false }, label = { Text("Desactivado") })
+                FilterChip(state.draftReminderActive, { state.draftReminderActive = true }, label = { Text("Activado") })
+            }
         }
         state.assignError?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
         Button(onClick = { state.assign() }, Modifier.fillMaxWidth().height(50.dp)) {
-            Text("Asignar tarea al paciente")
+            Text("Guardar actividad")
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -1239,8 +1439,10 @@ private fun TherapistAssignedScreen(state: PrototypeState) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 SectionLabel("Resumen de la asignación")
                 Text("Conducta: ${p.behavior}", style = MaterialTheme.typography.bodySmall)
-                Text("Dimensión: ${t.dimension.label} (${t.dimension.unit})", style = MaterialTheme.typography.bodySmall)
-                Text("Frecuencia: ${t.cadence} · Fase: ${t.phase.label}", style = MaterialTheme.typography.bodySmall)
+                val measure = if (t.taskType == TaskType.REGISTRO_AUTONOMO) "${t.dimension.label} (${t.dimension.unit})" else t.metricUnit?.label.orEmpty()
+                Text("Tipo: ${t.taskType.label} · Mide: $measure", style = MaterialTheme.typography.bodySmall)
+                val recurrence = if (t.isRecurring) "Recurrente (${t.frequency})" else "Una sola vez"
+                Text("Fase: ${t.phase.label} · $recurrence", style = MaterialTheme.typography.bodySmall)
             }
         }
         Button(onClick = { state.openPatient(p.id) }, Modifier.fillMaxWidth().height(50.dp)) {
@@ -1272,3 +1474,4 @@ private fun TherapistProgressScreen(state: PrototypeState) {
         Spacer(Modifier.height(24.dp))
     }
 }
+

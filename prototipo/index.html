@@ -443,6 +443,10 @@ function seed(){
         condition:'Ansiedad social',
         phase:'intervencion',
         behavior:'Episodios de ansiedad en clase',
+        behaviors:[
+          {id:'b-ana-anxiety',name:'Episodios de ansiedad en clase',type:'desadaptativa',dimension:'frecuencia',baselineOpen:false,baselineCount:7},
+          {id:'b-ana-participation',name:'Participar en clase a pesar de la ansiedad',type:'adaptativa',dimension:'frecuencia',baselineOpen:true,baselineCount:0}
+        ],
         dimension:'frecuencia',
         baselineDays:7,
         series:[5,6,5,7,6,6,5, 4,4,3,4,3],
@@ -467,6 +471,7 @@ function seed(){
         condition:'Insomnio de conciliación',
         phase:'linea_base',
         behavior:'Minutos para conciliar el sueño',
+        behaviors:[{id:'b-dan-sleep',name:'Minutos para conciliar el sueño',type:'desadaptativa',dimension:'duracion',baselineOpen:true,baselineCount:0}],
         dimension:'duracion',
         baselineDays:14,
         series:[52,60,45,58,50,63,48,55],
@@ -481,10 +486,10 @@ function seed(){
   };
 }
 function blankDraft(){
-  return {patient:'ana',behavior:'',dimension:'frecuencia',cadence:'Diario',phase:'intervencion',due:'',instructions:''};
+  return {patient:'ana',behaviorId:'',behavior:'',dimension:'frecuencia',cadence:'Diario',phase:'intervencion',due:'',instructions:'',name:'',definition:'',type:'desadaptativa'};
 }
 let S = load() || seed();
-function load(){try{const r=JSON.parse(localStorage.getItem('usbrain-proto'));return r&&r.patients?r:null}catch(e){return null}}
+function load(){try{const r=JSON.parse(localStorage.getItem('usbrain-proto'));if(!r||!r.patients)return null;Object.values(r.patients).forEach(p=>{if(!p.behaviors)p.behaviors=[{id:'legacy-'+p.id,name:p.behavior||'Conducta sin nombre',type:'desadaptativa',dimension:p.dimension||'frecuencia',baselineOpen:p.phase==='linea_base',baselineCount:p.baselineDays||0}];p.tasks.forEach(t=>{if(!t.behaviorId)t.behaviorId=p.behaviors[0].id;});});return r}catch(e){return null}}
 function save(){try{localStorage.setItem('usbrain-proto',JSON.stringify(S))}catch(e){}}
 
 /* ============ tema ============ */
@@ -514,7 +519,7 @@ document.querySelectorAll('[data-jump]').forEach(b=>{
 });
 function syncSeg(){
   const map={login:'login',patientHome:'paciente',patientTask:'paciente',patientDone:'paciente',patientProgress:'paciente',
-    therapistHome:'terapeuta',therapistPatient:'terapeuta',therapistNewTask:'terapeuta',therapistAssigned:'terapeuta',therapistProgress:'terapeuta','2fa':'login'};
+    therapistHome:'terapeuta',therapistPatient:'terapeuta',therapistNewBehavior:'terapeuta',therapistNewTask:'terapeuta',therapistAssigned:'terapeuta',therapistProgress:'terapeuta','2fa':'login'};
   const cur=map[S.screen]||'login';
   document.querySelectorAll('[data-jump]').forEach(b=>b.setAttribute('aria-pressed', String(b.dataset.jump===cur)));
 }
@@ -807,9 +812,9 @@ function screenTherapistHome(){
     </div>
     <p class="sub" style="margin-bottom:16px">${list.length} pacientes activos · ${totalPend} tareas pendientes de registro.</p>
 
-    <button class="btn navy" data-act="new-task" style="margin-bottom:18px">
+    <button class="btn navy" data-act="new-behavior" style="margin-bottom:18px">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      Asignar nueva tarea
+      Nueva conducta
     </button>
 
     <p class="eyebrow" style="margin-bottom:8px">Mis pacientes</p>
@@ -848,15 +853,47 @@ function screenTherapistPatient(){
 
     ${chartCard(p)}
 
-    <button class="btn navy" data-act="new-task-for" data-patient="${p.id}" style="margin:16px 0">
+    <button class="btn navy" data-act="new-behavior-for" data-patient="${p.id}" style="margin:16px 0">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      Asignar tarea a ${p.name.split(' ')[0]}
+      Nueva conducta para ${p.name.split(' ')[0]}
     </button>
+
+    <p class="eyebrow" style="margin-bottom:8px">Conductas del caso</p>
+    <div class="stack" style="margin-bottom:16px">
+      ${(p.behaviors||[]).map(b=>`<div class="card">
+        <div class="between"><b style="font-family:'Poppins'">${esc(b.name)}</b>${phasePill(b.baselineOpen?'linea_base':'intervencion')}</div>
+        <p class="tiny muted" style="margin-top:5px">${b.type==='adaptativa'?'Adaptativa':'Desadaptativa'} · ${DIMENSIONS[b.dimension].label} · ${b.baselineCount||0} observaciones de línea base</p>
+        ${b.baselineOpen?`<button class="btn secondary" data-act="close-baseline" data-patient="${p.id}" data-behavior="${b.id}" style="margin-top:10px">Cerrar línea base</button>`:''}
+        <button class="btn secondary" data-act="new-task-for-behavior" data-patient="${p.id}" data-behavior="${b.id}" style="margin-top:10px">Nueva tarea para esta conducta</button>
+      </div>`).join('')}
+    </div>
 
     <p class="eyebrow" style="margin-bottom:8px">Tareas asignadas</p>
     <div class="stack">
       ${p.tasks.map(t=>taskCard(t,{clickable:false})).join('')}
     </div>
+  </div></div>`;
+}
+
+function screenTherapistNewBehavior(){
+  const d=S.draft;
+  const opts=Object.entries(S.patients).map(([id,p])=>`<option value="${id}" ${d.patient===id?'selected':''}>${esc(p.name)}</option>`).join('');
+  return `<div class="view-inner"><div class="pad pad-b fade">
+    <button class="tiny muted" data-act="to-home" style="font-weight:600;margin-bottom:10px">← Cancelar</button>
+    <h1 class="h-screen">Nueva conducta</h1>
+    <p class="sub" style="margin-bottom:18px">Guarda primero la conducta y después podrás revisar su línea base y crear tareas.</p>
+    <div class="field"><label for="f-patient">Consultante</label><select id="f-patient">${opts}</select></div>
+    <div class="field"><label for="f-name">Nombre de la conducta</label><input id="f-name" value="${esc(d.name)}" placeholder="Ej.: Participar en clase a pesar de la ansiedad"></div>
+    <div class="field"><label for="f-definition">Definición operacional</label><textarea id="f-definition" placeholder="Describe cuándo se considera observada">${esc(d.definition)}</textarea></div>
+    <div class="field"><label>Clasificación</label><div class="chips" id="f-type">
+      <button type="button" class="chip" data-type="adaptativa" aria-pressed="${d.type==='adaptativa'}">Adaptativa</button>
+      <button type="button" class="chip" data-type="desadaptativa" aria-pressed="${d.type==='desadaptativa'}">Desadaptativa</button>
+    </div></div>
+    <div class="field"><label>Dimensión de medición</label><div class="chips" id="f-dim">
+      ${Object.entries(DIMENSIONS).map(([k,v])=>`<button type="button" class="chip" data-dim="${k}" aria-pressed="${d.dimension===k}">${v.label}</button>`).join('')}
+    </div></div>
+    <button class="btn navy" data-act="save-behavior">Guardar conducta</button>
+    <p class="tiny muted" style="text-align:center;margin-top:10px" id="behaviorErr"></p>
   </div></div>`;
 }
 
@@ -873,10 +910,9 @@ function screenTherapistNewTask(){
       <select id="f-patient">${opts}</select>
     </div>
 
-    <div class="field">
-      <label for="f-behavior">Conducta a observar</label>
-      <input id="f-behavior" type="text" value="${esc(d.behavior)}" placeholder="Ej.: Episodios de ansiedad en clase">
-      <span class="hint">Es la variable dependiente del diseño de caso único.</span>
+    <div class="field"><label for="f-behavior-id">Conducta relacionada</label>
+      <select id="f-behavior-id">${(S.patients[d.patient].behaviors||[]).map(b=>`<option value="${b.id}" ${d.behaviorId===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select>
+      <span class="hint">La tarea debe pertenecer a una conducta existente.</span>
     </div>
 
     <div class="field">
@@ -982,10 +1018,10 @@ function renderTabs(){
   if(S.role==='paciente'){
     tabs=[['inicio','Inicio','patientHome'],['progreso','Progreso','patientProgress'],['perfil','Perfil','patientProfile']];
   }else{
-    tabs=[['pacientes','Pacientes','therapistHome'],['nueva','Nueva tarea','therapistNewTask'],['analisis','Progreso','therapistProgress']];
+    tabs=[['pacientes','Pacientes','therapistHome'],['nueva','Nueva conducta','therapistNewBehavior'],['analisis','Progreso','therapistProgress']];
   }
   const cur = ({patientHome:'inicio',patientTask:'inicio',patientDone:'inicio',patientProgress:'progreso',patientProfile:'perfil',
-    therapistHome:'pacientes',therapistPatient:'pacientes',therapistNewTask:'nueva',therapistAssigned:'nueva',therapistProgress:'analisis'})[S.screen];
+    therapistHome:'pacientes',therapistPatient:'pacientes',therapistNewBehavior:'nueva',therapistNewTask:'nueva',therapistAssigned:'nueva',therapistProgress:'analisis'})[S.screen];
   tb.innerHTML=tabs.map(([k,label,scr])=>`<button data-tab="${scr}" data-k="${k}" aria-current="${cur===k}">
     ${tabIcon(k)}<span>${label}</span></button>`).join('');
   tb.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{
@@ -1022,7 +1058,7 @@ const SCREENS={
   patientHome:screenPatientHome,patientTask:screenPatientTask,patientDone:screenPatientDone,
   patientProgress:screenPatientProgress,patientProfile:screenPatientProfile,
   therapistHome:screenTherapistHome,therapistPatient:screenTherapistPatient,
-  therapistNewTask:screenTherapistNewTask,therapistAssigned:screenTherapistAssigned,therapistProgress:screenTherapistProgress
+  therapistNewBehavior:screenTherapistNewBehavior,therapistNewTask:screenTherapistNewTask,therapistAssigned:screenTherapistAssigned,therapistProgress:screenTherapistProgress
 };
 const NOTES={
   login:{t:'1 · Inicio de sesión',m:'Un solo login para los dos roles.',l:[
@@ -1119,13 +1155,20 @@ function bind(){
 
   // form: new task
   const fp=v.querySelector('#f-patient'); if(fp) fp.addEventListener('change',()=>{S.draft.patient=fp.value;save();});
+  const fbi=v.querySelector('#f-behavior-id'); if(fbi) fbi.addEventListener('change',()=>{const b=(S.patients[S.draft.patient].behaviors||[]).find(x=>x.id===fbi.value);S.draft.behaviorId=fbi.value;if(b){S.draft.behavior=b.name;S.draft.dimension=b.dimension;S.draft.phase=b.baselineOpen?'linea_base':'intervencion';}save();render();});
   const fb=v.querySelector('#f-behavior'); if(fb) fb.addEventListener('input',()=>{S.draft.behavior=fb.value;});
+  const fn=v.querySelector('#f-name'); if(fn) fn.addEventListener('input',()=>{S.draft.name=fn.value;});
+  const fdef=v.querySelector('#f-definition'); if(fdef) fdef.addEventListener('input',()=>{S.draft.definition=fdef.value;});
   const fd=v.querySelector('#f-due'); if(fd) fd.addEventListener('input',()=>{S.draft.due=fd.value;});
   const fi=v.querySelector('#f-instr'); if(fi) fi.addEventListener('input',()=>{S.draft.instructions=fi.value;});
   v.querySelectorAll('#f-dim [data-dim]').forEach(b=>b.addEventListener('click',()=>{
     S.draft.dimension=b.dataset.dim; save();
     v.querySelectorAll('#f-dim [data-dim]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
     document.getElementById('dimHint').innerHTML=`${DIMENSIONS[b.dataset.dim].hint} · se registra en ${DIMENSIONS[b.dataset.dim].unit}.`;
+  }));
+  v.querySelectorAll('#f-type [data-type]').forEach(b=>b.addEventListener('click',()=>{
+    S.draft.type=b.dataset.type; save();
+    v.querySelectorAll('#f-type [data-type]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
   }));
   v.querySelectorAll('#f-cad [data-cad]').forEach(b=>b.addEventListener('click',()=>{
     S.draft.cadence=b.dataset.cad; save();
@@ -1156,33 +1199,61 @@ function handleAct(act,el){
     else val=+(document.getElementById('scaleIn').value);
     const note=(document.getElementById('taskNote').value||'').trim();
     t.status='completada';
-    t.entries.push({date:'Hoy',value:val,note});
-    if(t.feedsSeries) p.series.push(val);
+    t.entries.push({date:'Hoy',value:val,note,phase:t.phase});
+    const b=(p.behaviors||[]).find(x=>x.id===t.behaviorId);
+    if(t.phase==='linea_base' && b && b.baselineOpen) b.baselineCount=(b.baselineCount||0)+1;
+    else if(t.feedsSeries) p.series.push(val);
+    save();
     go('patientDone');
     return;
   }
 
+  if(act==='new-behavior'){ S.draft=blankDraft(); go('therapistNewBehavior'); return; }
+  if(act==='new-behavior-for'){ S.draft=blankDraft(); S.draft.patient=el.dataset.patient; go('therapistNewBehavior'); return; }
   if(act==='new-task'){ S.draft=blankDraft(); go('therapistNewTask'); return; }
   if(act==='new-task-for'){ S.draft=blankDraft(); S.draft.patient=el.dataset.patient; go('therapistNewTask'); return; }
+  if(act==='new-task-for-behavior'){
+    S.draft=blankDraft(); S.draft.patient=el.dataset.patient; S.draft.behaviorId=el.dataset.behavior;
+    const b=S.patients[S.draft.patient].behaviors.find(x=>x.id===S.draft.behaviorId);
+    if(b){S.draft.behavior=b.name;S.draft.dimension=b.dimension;S.draft.phase=b.baselineOpen?'linea_base':'intervencion';}
+    go('therapistNewTask'); return;
+  }
+  if(act==='close-baseline'){
+    const b=(S.patients[el.dataset.patient].behaviors||[]).find(x=>x.id===el.dataset.behavior);
+    if(b){b.baselineOpen=false;b.baselineClosedOn='Hoy';save();render();}
+    return;
+  }
 
-  if(act==='assign'){
+  if(act==='save-behavior'){
     const d=S.draft;
-    if(!d.behavior.trim() || !d.instructions.trim()){
-      document.getElementById('assignErr').textContent='Completa la conducta y las indicaciones para el paciente.';
+    if(!d.name.trim() || !d.definition.trim()){
+      document.getElementById('behaviorErr').textContent='Completa el nombre y la definición operacional.';
       return;
     }
     const p=S.patients[d.patient];
-    p.behavior=d.behavior.trim();
-    p.dimension=d.dimension;
-    p.phase=d.phase;
+    const b={id:'b'+Date.now(),name:d.name.trim(),definition:d.definition.trim(),type:d.type,dimension:d.dimension,baselineOpen:true,baselineCount:0};
+    p.behaviors=p.behaviors||[]; p.behaviors.push(b); p.behavior=b.name; p.dimension=b.dimension; p.phase='linea_base';
+    save(); go('therapistPatient',{activePatient:d.patient}); return;
+  }
+
+  if(act==='assign'){
+    const d=S.draft;
+    const p=S.patients[d.patient];
+    const b=(p.behaviors||[]).find(x=>x.id===d.behaviorId) || (p.behaviors||[])[0];
+    if(!b || !d.instructions.trim()){
+      document.getElementById('assignErr').textContent='Selecciona una conducta y completa las indicaciones para el paciente.';
+      return;
+    }
+    const phase=b.baselineOpen?'linea_base':'intervencion';
     p.tasks.push({
       id:'n'+Date.now(),
-      title:d.behavior.trim().length>42?d.behavior.trim().slice(0,40)+'…':d.behavior.trim(),
+      behaviorId:b.id,
+      title:b.name.length>42?b.name.slice(0,40)+'…':b.name,
       instructions:d.instructions.trim(),
-      dimension:d.dimension,
+      dimension:b.dimension,
       cadence:d.cadence,
       due:d.due.trim()||'Sin fecha definida',
-      phase:d.phase,
+      phase:phase,
       status:'pendiente',
       feedsSeries:true,
       entries:[]
