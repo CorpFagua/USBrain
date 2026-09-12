@@ -12,16 +12,14 @@ import androidx.compose.ui.tooling.preview.Preview
 @Preview
 fun App() {
     var themeOverride by remember { mutableStateOf<Boolean?>(null) }
-    var resetToken by remember { mutableStateOf(0) }
     val dark = themeOverride ?: isSystemInDarkTheme()
 
     UsBrainTheme(darkTheme = dark) {
-        val state = remember(resetToken) { PrototypeState() }
+        val state = remember { PrototypeState() }
         PrototypeApp(
             state = state,
             dark = dark,
             onToggleTheme = { themeOverride = !dark },
-            onReset = { resetToken++ },
         )
     }
 }

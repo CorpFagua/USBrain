@@ -60,6 +60,64 @@ Está implementado un **prototipo navegable** de los flujos principales, dentro 
 
 ---
 
+## Fundamentación: qué variables se grafican en diseño de caso único
+
+En diseño de caso único (*single-case/single-subject research design*) la variable dependiente
+nunca es "la tarea" que se le asignó a alguien para registrar: es la **conducta objetivo**
+(*target behavior*), operacionalizada en una **dimensión de medición** concreta. Una actividad
+de registro es solo el instrumento con el que se captura una observación de esa dimensión; lo
+que se analiza y se grafica —sesión a sesión— es la serie temporal de la conducta en esa
+dimensión, comparando fase de línea base contra fase de intervención.
+
+### Dimensiones de medición reconocidas en la literatura
+
+| Dimensión | Qué mide | Unidad típica |
+|---|---|---|
+| **Frecuencia / conteo** | Número de veces que ocurre la conducta en un período de observación | episodios |
+| **Tasa (rate)** | Frecuencia dividida por el tiempo de observación, para comparar sesiones de distinta duración | episodios/minuto |
+| **Duración** | Cuánto dura la conducta, por ocurrencia o en total | minutos / segundos |
+| **Latencia** | Tiempo entre un estímulo/instrucción y el inicio de la conducta | segundos |
+| **Intensidad / magnitud** | Severidad o fuerza de la respuesta, normalmente por escala | escala (p. ej. 0–10) |
+| **Porcentaje (de intervalos o de ensayos)** | Proporción de intervalos de observación o de oportunidades en que ocurrió la conducta (registro por intervalos: parcial, total o de muestreo de tiempo momentáneo) | % |
+| **Tiempo entre respuestas (IRT)** | Intervalo entre una ocurrencia y la siguiente | segundos |
+| **Producto permanente** | Conteo de un resultado tangible que deja la conducta (p. ej. tareas completadas, objetos rotos) | unidades |
+
+Fuentes: Cooper, Heron & Heward, *Applied Behavior Analysis* (3.ª ed., Pearson, 2020) —
+capítulos de medición conductual (cap. 4) y de representación gráfica de datos de caso único
+(cap. 5); Kazdin, A.E., *Single-Case Research Designs: Methods for Clinical and Applied
+Settings* (2.ª ed., Oxford University Press, 2011); Barlow, D.H., Nock, M.K. & Hersen, M.,
+*Single Case Experimental Designs* (3.ª ed., Pearson, 2009); Kratochwill, T.R. et al.,
+*Single-Case Design Technical Documentation*, What Works Clearinghouse — Institute of Education
+Sciences (2010/2013).
+
+### Cómo se lee la gráfica (convención del campo)
+
+- Eje X: número de observación/sesión (orden, no siempre tiempo continuo real).
+- Eje Y: la dimensión elegida, en su propia unidad — **nunca se mezclan dos dimensiones
+  distintas en una misma serie** (no tiene sentido promediar "episodios" con "minutos").
+- Un quiebre/línea vertical marca el cambio de fase (línea base → intervención); el trazo no
+  se conecta a través de ese quiebre, precisamente para no sugerir una tendencia continua entre
+  fases que se están comparando.
+- El análisis es visual (nivel, tendencia, variabilidad, inmediatez del cambio, superposición
+  entre fases), no estadístico-inferencial: por eso la app prioriza la lectura gráfica sobre
+  cualquier resumen numérico agregado.
+
+### Cómo aplica esto en la app
+
+- `Dimension` (en [`PrototypeModel.kt`](shared/src/commonMain/kotlin/org/usbrain/project/PrototypeModel.kt))
+  ya cubre tres de las dimensiones anteriores — `FRECUENCIA`, `DURACION`, `INTENSIDAD` (como
+  escala de magnitud autoinformada 0–10) — quedando `tasa`, `porcentaje de intervalos`, `latencia`
+  e `IRT` como extensiones naturales a futuro si un caso las requiere.
+- La gráfica pertenece a la **conducta**, no a una actividad: `Behavior.dimensions` expone todas
+  las dimensiones que efectivamente se están registrando para esa conducta (puede haber más de
+  una actividad de registro autónomo, cada una midiendo un aspecto distinto del mismo episodio),
+  y `Behavior.recordsFor(dimension)` filtra la serie para no mezclar escalas.
+  `TherapistBehaviorScreen` muestra la evolución de la conducta ahí, con pestañas para alternar
+  entre dimensiones cuando hay más de una — así la gráfica es intercambiable según lo que el
+  terapeuta esté evaluando, en vez de fijarse a la actividad que se tocó para llegar a ella.
+
+---
+
 ## Estructura del código del prototipo (`shared/src/commonMain/kotlin/org/usbrain/project`)
 
 | Archivo | Contenido |

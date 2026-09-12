@@ -5,7 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.toMutableStateList
 
-enum class Role { PATIENT, THERAPIST }
+enum class Role { PATIENT, THERAPIST, ADMIN }
 
 enum class Dimension(val label: String, val unit: String, val hint: String) {
     FRECUENCIA("Frecuencia", "episodios", "¿Cuántas veces ocurrió hoy la conducta?"),
@@ -18,14 +18,10 @@ enum class BehaviorType(val label: String) { ADAPTATIVA("Adaptativa"), DESADAPTA
 enum class TaskStatus { PENDIENTE, COMPLETADA }
 
 // Solo aplica a conductas desadaptativas; NO_APLICA es el valor por defecto sin análisis funcional.
-enum class BehavioralFunction(val label: String) {
-    ATENCION("Atención"),
-    ESCAPE_EVITACION("Escape / evitación"),
-    TANGIBLE("Tangible"),
-    SENSORIAL("Sensorial"),
-    COMUNICACION("Comunicación"),
-    NO_APLICA("No aplica"),
-}
+// Catálogo dinámico (mismo patrón que BehaviorCategory más abajo): el terapeuta puede registrar
+// una función conductual nueva si el catálogo semilla no cubre el caso, sin tocar código.
+data class BehavioralFunctionOption(val id: String, val label: String)
+const val NO_APLICA_FUNCTION_ID = "fn-no-aplica"
 
 enum class TaskType(val label: String) {
     REGISTRO_AUTONOMO("Registro autónomo"),
@@ -45,9 +41,75 @@ enum class MetricUnit(val label: String) {
 enum class Screen {
     LOGIN, TWO_FACTOR,
     PATIENT_HOME, PATIENT_TASK, PATIENT_DONE, PATIENT_PROGRESS, PATIENT_PROFILE,
-    THERAPIST_HOME, THERAPIST_PATIENT, THERAPIST_NEW_BEHAVIOR, THERAPIST_NEW_TASK,
-    THERAPIST_ASSIGNED, THERAPIST_PROGRESS,
+    // El terapeuta no tiene una pantalla de "progreso" aparte: al trabajar con diseño de caso
+    // único, el análisis gráfico vive como pestaña dentro del detalle de la conducta
+    // (THERAPIST_BEHAVIOR). THERAPIST_PATIENT_INFO es la ficha administrativa del paciente
+    // (diagnóstico CIE-10, datos de contacto…), separada de THERAPIST_PATIENT para que esa
+    // pantalla se mantenga enfocada solo en las conductas del caso.
+    THERAPIST_HOME, THERAPIST_PATIENT, THERAPIST_PATIENT_INFO, THERAPIST_BEHAVIOR, THERAPIST_TASK_DETAIL,
+    THERAPIST_NEW_BEHAVIOR, THERAPIST_NEW_TASK, THERAPIST_ASSIGNED, THERAPIST_PROFILE,
+    ADMIN_HOME,
 }
+
+/** Pestañas dentro del detalle de una conducta: separan "gestionar actividades" de "ver la
+ * evolución graficada" para no mezclar creación de datos con su análisis en la misma vista. */
+enum class BehaviorTab { ACTIVIDADES, ANALISIS }
+
+/** Un ítem de la barra de navegación inferior de un perfil. */
+data class NavTab(val screen: Screen, val label: String, val glyph: String)
+
+/**
+ * Perfil de acceso: define qué pantalla de inicio y qué tabs ve un rol al iniciar sesión.
+ * Vive como lista mutable en [PrototypeState] (`roleProfiles`) para que la navegación de
+ * toda la app se resuelva a partir de estos datos y no de `if/else` por rol; así, registrar
+ * un perfil nuevo (o ajustar uno existente) no requiere tocar las pantallas ni la barra inferior.
+ */
+data class RoleProfile(
+    val role: Role,
+    val displayName: String,
+    val description: String,
+    val badgeColor: Long,
+    val homeScreen: Screen,
+    val tabs: List<NavTab>,
+)
+
+private fun defaultRoleProfiles(): List<RoleProfile> = listOf(
+    RoleProfile(
+        role = Role.PATIENT,
+        displayName = "Paciente",
+        description = "Consulta y llena las tareas que asigna tu terapeuta",
+        badgeColor = 0xFF7B66C2, // Brand.Violet
+        homeScreen = Screen.PATIENT_HOME,
+        tabs = listOf(
+            NavTab(Screen.PATIENT_HOME, "Inicio", "home"),
+            NavTab(Screen.PATIENT_PROGRESS, "Progreso", "chart"),
+            NavTab(Screen.PATIENT_PROFILE, "Perfil", "person"),
+        ),
+    ),
+    RoleProfile(
+        role = Role.THERAPIST,
+        displayName = "Terapeuta",
+        description = "Define conductas y asigna tareas de seguimiento",
+        badgeColor = 0xFF0F2540, // Brand.Navy
+        homeScreen = Screen.THERAPIST_HOME,
+        // Sin tab de "Progreso" agregado: en caso único el análisis es por paciente/actividad,
+        // no un tablero global — se llega a él entrando al paciente → conducta → actividad.
+        tabs = listOf(
+            NavTab(Screen.THERAPIST_HOME, "Pacientes", "home"),
+            NavTab(Screen.THERAPIST_PROFILE, "Perfil", "person"),
+        ),
+    ),
+    RoleProfile(
+        role = Role.ADMIN,
+        displayName = "Administrador",
+        description = "Gestiona perfiles, permisos y accesos del sistema",
+        badgeColor = 0xFFFF7A00, // Brand.Orange
+        homeScreen = Screen.ADMIN_HOME,
+        tabs = listOf(
+            NavTab(Screen.ADMIN_HOME, "Panel", "home"),
+        ),
+    ),
+)
 
 data class TaskEntry(val date: String, val value: Double, val note: String, val phase: Phase)
 
@@ -96,7 +158,7 @@ class Behavior(
     val type: BehaviorType,
     val categoryId: String,
     baselineOpenInitially: Boolean,
-    behavioralFunction: BehavioralFunction = BehavioralFunction.NO_APLICA,
+    behavioralFunctionId: String = NO_APLICA_FUNCTION_ID,
     replacementBehaviorId: String? = null,
     baselineEntries: List<BehaviorRecord> = emptyList(),
     tasks: List<TrackTask> = emptyList(),
@@ -104,23 +166,45 @@ class Behavior(
     var baselineOpen by mutableStateOf(baselineOpenInitially)
     var baselineClosedOn by mutableStateOf<String?>(if (baselineOpenInitially) null else "Demo")
     // Mutable para permitir enlazar la conducta de reemplazo más adelante, aunque este formulario no se reabra.
-    var behavioralFunction by mutableStateOf(behavioralFunction)
+    // Referencia al catálogo dinámico `PrototypeState.behavioralFunctions` por id, no un enum
+    // cerrado, para poder registrar funciones nuevas sin tocar código.
+    var behavioralFunctionId by mutableStateOf(behavioralFunctionId)
     var replacementBehaviorId by mutableStateOf(replacementBehaviorId)
     val baselineEntries = baselineEntries.toMutableStateList()
     val tasks = tasks.toMutableStateList()
 
     // El tipo de medición ya no se fija en la conducta: se elige por tarea de registro autónomo.
+    // Se conserva como "dimensión por defecto" (la primera declarada) para vistas que solo
+    // necesitan un rótulo rápido (tarjetas, badges); la gráfica real usa `dimensions`/`recordsFor`.
     val dimension: Dimension
         get() = tasks.firstOrNull { it.taskType == TaskType.REGISTRO_AUTONOMO }?.dimension
             ?: baselineEntries.firstOrNull()?.dimension
             ?: Dimension.FRECUENCIA
+
+    // Todas las variables que efectivamente se están midiendo para esta conducta: una misma
+    // conducta puede tener más de una actividad de registro autónomo, cada una evaluando un
+    // aspecto distinto del mismo episodio (p. ej. frecuencia Y duración). En diseño de caso
+    // único cada dimensión se grafica por separado —no se mezclan escalas en una sola serie—,
+    // así que la UI debe ofrecerlas como opciones intercambiables. Ver "Variables graficadas en
+    // diseño de caso único" en el README para la fundamentación.
+    val dimensions: List<Dimension>
+        get() {
+            val fromTasks = tasks.filter { it.taskType == TaskType.REGISTRO_AUTONOMO }.map { it.dimension }
+            val fromBaseline = baselineEntries.map { it.dimension }
+            return (fromTasks + fromBaseline).distinct().ifEmpty { listOf(Dimension.FRECUENCIA) }
+        }
 
     val records: List<BehaviorRecord>
         get() = tasks.filter { it.taskType == TaskType.REGISTRO_AUTONOMO }.flatMap { task -> task.entries.filter { it.phase == Phase.INTERVENCION }.map { entry ->
             BehaviorRecord("${task.id}-${entry.date}", task.id, id, entry.date, entry.value, entry.note, entry.phase, task.dimension)
         } } + baselineEntries
 
+    // Filtra la serie a una sola dimensión: es lo que realmente debe alimentar una gráfica,
+    // para no mezclar, por ejemplo, "episodios" con "minutos" en la misma línea de tendencia.
+    fun recordsFor(dimension: Dimension): List<BehaviorRecord> = records.filter { it.dimension == dimension }
+
     val observationCount: Int get() = baselineEntries.size
+    fun observationCountFor(dimension: Dimension): Int = baselineEntries.count { it.dimension == dimension }
 }
 
 class SingleCase(
@@ -133,6 +217,12 @@ class SingleCase(
     val phase: Phase get() = if (behaviorList.any { it.baselineOpen }) Phase.LINEA_BASE else Phase.INTERVENCION
 }
 
+// Diagnóstico por código CIE-10 (Clasificación Internacional de Enfermedades, OMS — cap. V,
+// trastornos mentales y del comportamiento). Nulo mientras no se asigne ninguno: un paciente
+// puede empezar sin diagnóstico y el terapeuta se lo asigna cuando corresponda; puede tener más
+// de uno a la vez si hay comorbilidad, por eso vive como lista y no como campo único.
+data class Cie10Diagnosis(val code: String, val label: String)
+
 class Patient(
     val id: String,
     val name: String,
@@ -141,7 +231,9 @@ class Patient(
     val colorArgb: Long,
     val condition: String,
     val case: SingleCase,
+    diagnoses: List<Cie10Diagnosis> = emptyList(),
 ) {
+    val diagnoses = diagnoses.toMutableStateList()
     val behaviors: List<Behavior> get() = case.behaviorList
     val tasks: List<TrackTask> get() = case.behaviorList.flatMap { it.tasks }
     val behavior: String get() = case.behaviorList.firstOrNull()?.name ?: "Sin conducta"
@@ -165,6 +257,9 @@ class PrototypeState {
     var activePatientId by mutableStateOf("ana")
     var activeTaskId by mutableStateOf<String?>(null)
     var activeBehaviorId by mutableStateOf<String?>(null)
+    // Pestaña activa del detalle de conducta; vive en el estado (no local a la pantalla) para
+    // que el FAB de "nueva actividad" en el Scaffold superior sepa si debe mostrarse.
+    var behaviorDetailTab by mutableStateOf(BehaviorTab.ACTIVIDADES)
 
     var taskInputValue by mutableStateOf(0.0)
     var taskNote by mutableStateOf("")
@@ -175,11 +270,16 @@ class PrototypeState {
     var draftDefinition by mutableStateOf("")
     var draftBehaviorType by mutableStateOf(BehaviorType.DESADAPTATIVA)
     var draftCategoryId by mutableStateOf<String?>(null)
-    var draftBehavioralFunction by mutableStateOf(BehavioralFunction.NO_APLICA)
+    var draftBehavioralFunctionId by mutableStateOf(NO_APLICA_FUNCTION_ID)
     var draftReplacementBehaviorId by mutableStateOf<String?>(null)
     var draftNewCategoryName by mutableStateOf("")
     var draftNewCategoryDomain by mutableStateOf("")
     var showNewCategoryForm by mutableStateOf(false)
+    var draftNewFunctionLabel by mutableStateOf("")
+    var showNewFunctionForm by mutableStateOf(false)
+    var draftDiagnosisCode by mutableStateOf("")
+    var draftDiagnosisLabel by mutableStateOf("")
+    var showNewDiagnosisForm by mutableStateOf(false)
     var draftTaskTitle by mutableStateOf("")
     var draftTaskType by mutableStateOf(TaskType.REGISTRO_AUTONOMO)
     var draftTaskDimension by mutableStateOf(Dimension.FRECUENCIA)
@@ -197,6 +297,18 @@ class PrototypeState {
     private var nextId = 10
     val patients = samplePatients().toMutableStateList()
     val categories = seedCategories().toMutableStateList()
+    // Mismo espíritu que `categories`: catálogo semilla editable, no un enum cerrado, para poder
+    // registrar una función conductual nueva cuando el análisis funcional del caso lo requiera.
+    val behavioralFunctions = seedBehavioralFunctions().toMutableStateList()
+    // Catálogo de apoyo (no exhaustivo) con códigos CIE-10 frecuentes en consulta psicológica;
+    // el terapeuta puede asignar cualquier otro código a mano si no está en la lista.
+    val cie10Catalog = seedCie10().toMutableStateList()
+
+    // Mutable a propósito: es el catálogo de roles/permisos del sistema, pensado para poder
+    // registrar perfiles nuevos más adelante sin cambiar la navegación (ver [RoleProfile]).
+    val roleProfiles = defaultRoleProfiles().toMutableStateList()
+    fun roleProfile(role: Role): RoleProfile? = roleProfiles.firstOrNull { it.role == role }
+    val currentProfile: RoleProfile? get() = role?.let { roleProfile(it) }
 
     fun patient(id: String): Patient = patients.first { it.id == id }
     fun me(): Patient = patient(meId)
@@ -215,6 +327,29 @@ class PrototypeState {
         categories.add(BehaviorCategory(id, name.trim(), domain.trim()))
         return id
     }
+
+    fun createBehavioralFunction(label: String): String? {
+        if (label.isBlank()) return null
+        val id = "fn${nextId++}"
+        behavioralFunctions.add(BehavioralFunctionOption(id, label.trim()))
+        return id
+    }
+
+    // Asignar, no reemplazar: un paciente puede tener más de un código CIE-10 (comorbilidad).
+    // Si el código ya estaba asignado no se duplica.
+    fun assignDiagnosis(patientId: String, code: String, label: String): Boolean {
+        val trimmedCode = code.trim().uppercase()
+        if (trimmedCode.isBlank()) return false
+        val p = patient(patientId)
+        if (p.diagnoses.none { it.code == trimmedCode }) {
+            p.diagnoses.add(Cie10Diagnosis(trimmedCode, label.trim().ifBlank { trimmedCode }))
+        }
+        return true
+    }
+
+    fun removeDiagnosis(patientId: String, code: String) {
+        patient(patientId).diagnoses.removeAll { it.code == code }
+    }
     
     // Funciones helper para las pantallas del paciente
     fun caseForPatient(patientId: String): String? = patient(patientId).case.id
@@ -228,19 +363,11 @@ class PrototypeState {
 
     fun verify() {
         role = loginRole
-        if (loginRole == Role.PATIENT) {
-            meId = "ana"; activePatientId = "ana"; screen = Screen.PATIENT_HOME
-        } else screen = Screen.THERAPIST_HOME
+        if (loginRole == Role.PATIENT) { meId = "ana"; activePatientId = "ana" }
+        screen = roleProfile(loginRole)?.homeScreen ?: Screen.LOGIN
     }
 
     fun logout() { role = null; screen = Screen.LOGIN }
-
-    fun jumpTo(target: Role) {
-        role = target
-        if (target == Role.PATIENT) {
-            meId = "ana"; activePatientId = "ana"; screen = Screen.PATIENT_HOME
-        } else screen = Screen.THERAPIST_HOME
-    }
 
     fun openTask(id: String, behaviorId: String? = null) {
         activeTaskId = id
@@ -271,11 +398,13 @@ class PrototypeState {
         draftDefinition = ""
         draftBehaviorType = BehaviorType.DESADAPTATIVA
         draftCategoryId = null
-        draftBehavioralFunction = BehavioralFunction.NO_APLICA
+        draftBehavioralFunctionId = NO_APLICA_FUNCTION_ID
         draftReplacementBehaviorId = null
         draftNewCategoryName = ""
         draftNewCategoryDomain = ""
         showNewCategoryForm = false
+        draftNewFunctionLabel = ""
+        showNewFunctionForm = false
         behaviorError = null
         screen = Screen.THERAPIST_NEW_BEHAVIOR
     }
@@ -292,17 +421,30 @@ class PrototypeState {
             Behavior(
                 id, patient.case.id, draftBehaviorName.trim(), draftDefinition.trim(),
                 draftBehaviorType, draftCategoryId!!, true,
-                behavioralFunction = if (isMaladaptive) draftBehavioralFunction else BehavioralFunction.NO_APLICA,
+                behavioralFunctionId = if (isMaladaptive) draftBehavioralFunctionId else NO_APLICA_FUNCTION_ID,
                 replacementBehaviorId = if (isMaladaptive) draftReplacementBehaviorId else null,
             )
         )
         activePatientId = patient.id
         activeBehaviorId = id
-        screen = Screen.THERAPIST_PATIENT
+        behaviorDetailTab = BehaviorTab.ACTIVIDADES
+        // Directo al detalle de la conducta recién creada: es donde ahora vive "Nueva actividad".
+        screen = Screen.THERAPIST_BEHAVIOR
     }
 
-    fun openPatient(id: String) { activePatientId = id; screen = Screen.THERAPIST_PATIENT }
-    fun openBehavior(id: String) { activeBehaviorId = id; screen = Screen.THERAPIST_PATIENT }
+    fun openPatient(id: String) {
+        activePatientId = id
+        showNewDiagnosisForm = false
+        draftDiagnosisCode = ""
+        draftDiagnosisLabel = ""
+        screen = Screen.THERAPIST_PATIENT
+    }
+    fun openBehaviorDetail(id: String) {
+        activeBehaviorId = id
+        behaviorDetailTab = BehaviorTab.ACTIVIDADES
+        screen = Screen.THERAPIST_BEHAVIOR
+    }
+    fun openTaskDetail(id: String) { activeTaskId = id; screen = Screen.THERAPIST_TASK_DETAIL }
 
     fun closeBaseline(id: String) {
         val behavior = behavior(id)
@@ -409,7 +551,40 @@ private fun samplePatients(): List<Patient> {
     val sleep = Behavior("b-dan-sleep", "case-daniel", "Minutos para conciliar el sueño", "Tiempo entre apagar la luz y quedarse dormido.", BehaviorType.DESADAPTATIVA, "cat-rabieta", true)
     sleep.tasks.add(TrackTask("d1", sleep.id, "Tiempo que tardaste en dormirte", "Cada mañana estima cuántos minutos pasaron desde que apagaste la luz hasta quedarte dormido.", TaskType.REGISTRO_AUTONOMO, Dimension.DURACION, null, "Hoy", true, "Diaria", null, false, Phase.LINEA_BASE, TaskStatus.PENDIENTE))
     return listOf(
-        Patient("ana", "Ana Torres", 20, "Psicología · 4.º sem", 0xFF7B66C2L, "Ansiedad social", SingleCase("case-ana", "ana", "Caso de ansiedad social", listOf(anxiety, participation))),
-        Patient("daniel", "Daniel Ruiz", 23, "Ing. Industrial · 8.º sem", 0xFFFF6B56L, "Insomnio de conciliación", SingleCase("case-daniel", "daniel", "Caso de insomnio", listOf(sleep))),
+        Patient(
+            "ana", "Ana Torres", 20, "Psicología · 4.º sem", 0xFF7B66C2L, "Ansiedad social",
+            SingleCase("case-ana", "ana", "Caso de ansiedad social", listOf(anxiety, participation)),
+            diagnoses = listOf(Cie10Diagnosis("F40.1", "Fobia social")),
+        ),
+        Patient(
+            "daniel", "Daniel Ruiz", 23, "Ing. Industrial · 8.º sem", 0xFFFF6B56L, "Insomnio de conciliación",
+            SingleCase("case-daniel", "daniel", "Caso de insomnio", listOf(sleep)),
+            diagnoses = listOf(Cie10Diagnosis("F51.0", "Insomnio no orgánico")),
+        ),
     )
 }
+
+// Catálogo semilla (mismo espíritu que seedCategories): el terapeuta puede agregar funciones
+// nuevas desde el formulario de conducta cuando el análisis funcional del caso lo requiera.
+private fun seedBehavioralFunctions(): List<BehavioralFunctionOption> = listOf(
+    BehavioralFunctionOption(NO_APLICA_FUNCTION_ID, "No aplica"),
+    BehavioralFunctionOption("fn-atencion", "Atención"),
+    BehavioralFunctionOption("fn-escape", "Escape / evitación"),
+    BehavioralFunctionOption("fn-tangible", "Tangible"),
+    BehavioralFunctionOption("fn-sensorial", "Sensorial"),
+    BehavioralFunctionOption("fn-comunicacion", "Comunicación"),
+)
+
+// Catálogo de apoyo, no exhaustivo: códigos CIE-10 (cap. V, OMS — trastornos mentales y del
+// comportamiento) frecuentes en consulta psicológica universitaria. El terapeuta puede asignar
+// cualquier otro código a mano si el caso no está cubierto por esta lista.
+private fun seedCie10(): List<Cie10Diagnosis> = listOf(
+    Cie10Diagnosis("F41.1", "Trastorno de ansiedad generalizada"),
+    Cie10Diagnosis("F41.0", "Trastorno de pánico"),
+    Cie10Diagnosis("F40.1", "Fobia social"),
+    Cie10Diagnosis("F43.1", "Trastorno de estrés postraumático"),
+    Cie10Diagnosis("F32.9", "Episodio depresivo, no especificado"),
+    Cie10Diagnosis("F51.0", "Insomnio no orgánico"),
+    Cie10Diagnosis("F90.0", "Trastorno de la actividad y la atención"),
+    Cie10Diagnosis("F84.0", "Autismo infantil"),
+)

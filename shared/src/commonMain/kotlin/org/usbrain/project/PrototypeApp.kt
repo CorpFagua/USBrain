@@ -9,6 +9,8 @@ package org.usbrain.project
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,12 +23,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -36,11 +39,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
@@ -67,6 +69,8 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontStyle
@@ -82,27 +86,45 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 
 @Composable
-fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit, onReset: () -> Unit) {
+fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { BrandTopBar(state, dark, onToggleTheme, onReset) },
         bottomBar = { if (showsBottomBar(state)) BottomBar(state) },
+        floatingActionButton = {
+            // "Crear" siempre como botón flotante en las listas de este flujo (conductas,
+            // actividades); el resto de acciones va como botón normal dentro del detalle.
+            val behaviorId = state.activeBehaviorId
+            if (state.screen == Screen.THERAPIST_PATIENT) {
+                FloatingActionButton(onClick = { state.startNewBehavior(state.activePatientId) }) {
+                    Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                }
+            } else if (state.screen == Screen.THERAPIST_BEHAVIOR && behaviorId != null && state.behaviorDetailTab == BehaviorTab.ACTIVIDADES) {
+                // Solo en la pestaña de "Actividades": en "Análisis" no hay nada que crear.
+                FloatingActionButton(onClick = { state.startNewTask(state.activePatientId, behaviorId) }) {
+                    Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        },
     ) { inner ->
         Box(Modifier.fillMaxSize().padding(inner)) {
             when (state.screen) {
                 Screen.LOGIN -> LoginScreen(state)
                 Screen.TWO_FACTOR -> TwoFactorScreen(state)
-                Screen.PATIENT_HOME -> PatientHomeScreen(state)
+                Screen.PATIENT_HOME -> PatientHomeScreen(state, dark, onToggleTheme)
                 Screen.PATIENT_TASK -> PatientTaskScreen(state)
                 Screen.PATIENT_DONE -> PatientDoneScreen(state)
                 Screen.PATIENT_PROGRESS -> PatientProgressScreen(state)
                 Screen.PATIENT_PROFILE -> PatientProfileScreen(state)
-                Screen.THERAPIST_HOME -> TherapistHomeScreen(state)
+                Screen.THERAPIST_HOME -> TherapistHomeScreen(state, dark, onToggleTheme)
                 Screen.THERAPIST_PATIENT -> TherapistPatientScreen(state)
+                Screen.THERAPIST_PATIENT_INFO -> TherapistPatientInfoScreen(state)
+                Screen.THERAPIST_BEHAVIOR -> TherapistBehaviorScreen(state)
+                Screen.THERAPIST_TASK_DETAIL -> TherapistTaskDetailScreen(state)
                 Screen.THERAPIST_NEW_BEHAVIOR -> TherapistNewBehaviorScreen(state)
                 Screen.THERAPIST_NEW_TASK -> TherapistNewTaskScreen(state)
                 Screen.THERAPIST_ASSIGNED -> TherapistAssignedScreen(state)
-                Screen.THERAPIST_PROGRESS -> TherapistProgressScreen(state)
+                Screen.THERAPIST_PROFILE -> TherapistProfileScreen(state)
+                Screen.ADMIN_HOME -> AdminHomeScreen(state, dark, onToggleTheme)
             }
         }
     }
@@ -112,99 +134,119 @@ private fun showsBottomBar(state: PrototypeState): Boolean {
     if (state.role == null) return false
     return state.screen !in listOf(
         Screen.LOGIN, Screen.TWO_FACTOR, Screen.PATIENT_TASK, Screen.PATIENT_DONE,
+        // Al entrar a un paciente quedas dentro de ese flujo (paciente → conducta →
+        // actividad): las tabs se ocultan hasta que vuelves a "Pacientes" con el botón atrás.
+        Screen.THERAPIST_PATIENT, Screen.THERAPIST_PATIENT_INFO, Screen.THERAPIST_BEHAVIOR, Screen.THERAPIST_TASK_DETAIL,
         Screen.THERAPIST_NEW_BEHAVIOR, Screen.THERAPIST_NEW_TASK, Screen.THERAPIST_ASSIGNED,
     )
 }
 
 /* ----------------------------- barras ----------------------------- */
 
+/** Botón circular flotante (sin caja rectangular) para acciones puntuales del header de cada pantalla. */
 @Composable
-private fun BrandTopBar(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit, onReset: () -> Unit) {
+private fun CircleIconButton(onClick: () -> Unit, content: @Composable () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(42.dp),
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { content() }
+    }
+}
+
+/** Header de las pantallas de inicio: avatar + saludo a la izquierda, acciones (tema/cerrar sesión) a la derecha. */
+@Composable
+private fun HomeHeader(
+    greeting: String,
+    name: String,
+    dark: Boolean,
+    onToggleTheme: () -> Unit,
+    onLogout: () -> Unit,
+    avatar: @Composable () -> Unit,
+) {
     var menu by remember { mutableStateOf(false) }
-    Surface(tonalElevation = 2.dp, color = MaterialTheme.colorScheme.surface) {
-        Row(
-            Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            UsBrainMark(size = 30.dp)
-            Spacer(Modifier.size(8.dp))
-            Column(Modifier.weight(1f)) {
-                Row {
-                    Text("US", color = Brand.Orange, fontWeight = FontWeight.Bold)
-                    Text("Brain", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
-                }
-                Text(
-                    contextLabel(state.screen),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            avatar()
+            Column {
+                Text(greeting, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             }
-            Box {
-                TextButton(onClick = { menu = true }) { Text("Menú") }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Ir a sesión paciente") },
-                        onClick = { state.jumpTo(Role.PATIENT); menu = false },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Ir a sesión terapeuta") },
-                        onClick = { state.jumpTo(Role.THERAPIST); menu = false },
-                    )
-                    HorizontalDivider()
-                    DropdownMenuItem(
-                        text = { Text(if (dark) "Tema claro" else "Tema oscuro") },
-                        onClick = { onToggleTheme(); menu = false },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Reiniciar demo") },
-                        onClick = { onReset(); menu = false },
-                    )
-                    if (state.role != null) {
-                        HorizontalDivider()
-                        DropdownMenuItem(
-                            text = { Text("Cerrar sesión") },
-                            onClick = { state.logout(); menu = false },
-                        )
-                    }
-                }
+        }
+        Box {
+            CircleIconButton(onClick = { menu = true }) { Text("⋯", fontWeight = FontWeight.Bold, fontSize = 18.sp) }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text(if (dark) "Tema claro" else "Tema oscuro") },
+                    onClick = { onToggleTheme(); menu = false },
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Cerrar sesión") },
+                    onClick = { onLogout(); menu = false },
+                )
             }
         }
     }
 }
 
-private fun contextLabel(screen: Screen): String = when (screen) {
-    Screen.LOGIN, Screen.TWO_FACTOR -> "Acceso"
-    Screen.PATIENT_HOME, Screen.PATIENT_TASK, Screen.PATIENT_DONE,
-    Screen.PATIENT_PROGRESS, Screen.PATIENT_PROFILE -> "Sesión: paciente"
-    else -> "Sesión: terapeuta"
+/** Header de las pantallas secundarias: botón circular de volver + título, sin barra ni caja de fondo. */
+@Composable
+private fun BackHeader(title: String, onBack: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        CircleIconButton(onClick = onBack) { NavGlyph("back", selected = false) }
+        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+    }
 }
 
+/**
+ * Pantalla "dueña" de un sub-flujo, para resaltar el tab correcto en la barra inferior aunque
+ * estemos en una pantalla que no es en sí un tab (p. ej. la ficha de un paciente cuelga de
+ * "Pacientes"). Es la única pieza que conoce esa jerarquía; los tabs en sí salen de [RoleProfile].
+ */
+private fun parentTab(screen: Screen): Screen = when (screen) {
+    Screen.PATIENT_TASK, Screen.PATIENT_DONE -> Screen.PATIENT_HOME
+    Screen.THERAPIST_PATIENT, Screen.THERAPIST_PATIENT_INFO, Screen.THERAPIST_BEHAVIOR, Screen.THERAPIST_TASK_DETAIL,
+    Screen.THERAPIST_NEW_BEHAVIOR, Screen.THERAPIST_NEW_TASK, Screen.THERAPIST_ASSIGNED -> Screen.THERAPIST_HOME
+    else -> screen
+}
+
+// Sin barra que los conecte ni texto: cada tab es su propio círculo flotando sobre el
+// fondo, solo con el ícono (el label de NavTab queda como descripción para accesibilidad).
 @Composable
 private fun BottomBar(state: PrototypeState) {
-    val items = if (state.role == Role.PATIENT) {
-        listOf(
-            Triple(Screen.PATIENT_HOME, "Inicio", "home"),
-            Triple(Screen.PATIENT_PROGRESS, "Progreso", "chart"),
-            Triple(Screen.PATIENT_PROFILE, "Perfil", "person"),
-        )
-    } else {
-        listOf(
-            Triple(Screen.THERAPIST_HOME, "Pacientes", "person"),
-            Triple(Screen.THERAPIST_PROGRESS, "Progreso", "chart"),
-        )
-    }
-    val current = state.screen
-    NavigationBar {
-        items.forEach { (target, label, glyph) ->
-            val selected = current == target ||
-                (target == Screen.PATIENT_HOME && current in listOf(Screen.PATIENT_TASK, Screen.PATIENT_DONE)) ||
-                (target == Screen.THERAPIST_HOME && current == Screen.THERAPIST_PATIENT)
-            NavigationBarItem(
-                selected = selected,
+    val tabs = state.currentProfile?.tabs ?: return
+    val current = parentTab(state.screen)
+    Row(
+        Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 18.dp),
+        horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        tabs.forEach { (target, label, glyph) ->
+            val selected = current == target
+            Surface(
                 onClick = { state.screen = target },
-                icon = { NavGlyph(glyph, selected) },
-                label = { Text(label) },
-            )
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.5.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+                shadowElevation = 6.dp,
+                modifier = Modifier.size(50.dp).semantics { contentDescription = label },
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    NavGlyph(glyph, selected)
+                }
+            }
         }
     }
 }
@@ -213,6 +255,8 @@ private fun BottomBar(state: PrototypeState) {
 
 @Composable
 private fun ScreenScaffold(content: @Composable ColumnScope.() -> Unit) {
+    // Sin statusBarsPadding(): Scaffold ya reserva ese espacio en `inner` al no haber topBar;
+    // duplicarlo aquí dejaba un hueco enorme y vacío arriba de cada pantalla.
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -244,11 +288,50 @@ private fun FieldLabel(text: String) {
     )
 }
 
+/** Chip seleccionable en forma de píldora completa (redondeo total, no la esquina M3 por defecto). */
 @Composable
-private fun Pill(text: String, container: Color, content: Color) {
-    Box(Modifier.clip(RoundedCornerShape(50)).background(container).padding(horizontal = 10.dp, vertical = 4.dp)) {
+private fun TabChip(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: String,
+    accent: Color = MaterialTheme.colorScheme.primary,
+) {
+    // Sin relleno tonal: fondo blanco/negro real siempre, y borde+texto del color de acento
+    // solo cuando está seleccionado, para que el color se lea como contraste real y no un lavado.
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label) },
+        shape = RoundedCornerShape(50),
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            selectedContainerColor = MaterialTheme.colorScheme.surface,
+            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            selectedLabelColor = accent,
+        ),
+        border = FilterChipDefaults.filterChipBorder(
+            enabled = true,
+            selected = selected,
+            borderColor = MaterialTheme.colorScheme.outline,
+            selectedBorderColor = accent,
+            borderWidth = 1.dp,
+            selectedBorderWidth = 1.5.dp,
+        ),
+    )
+}
+
+@Composable
+// Sin relleno de color: fondo neutro (blanco/negro real) + borde y texto del color de acento,
+// para que el contraste sea real en vez de un lavado pálido del color semántico.
+private fun Pill(text: String, accent: Color) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .border(1.dp, accent, RoundedCornerShape(50))
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+    ) {
         // maxLines=1 evita que un pill se "rompa" a dos líneas si el contenedor lo exprime.
-        Text(text, color = content, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.2.sp, maxLines = 1, overflow = TextOverflow.Clip, softWrap = false)
+        Text(text, color = accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.2.sp, maxLines = 1, overflow = TextOverflow.Clip, softWrap = false)
     }
 }
 
@@ -281,16 +364,16 @@ private fun DropdownField(
 private fun PhasePill(phase: Phase) {
     val s = LocalUsBrainSemantic.current
     val c = if (phase == Phase.LINEA_BASE) s.baseline else s.intervention
-    Pill(phase.label, c.copy(alpha = 0.16f), c)
+    Pill(phase.label, c)
 }
 
 @Composable
 private fun StatusPill(status: TaskStatus) {
     val s = LocalUsBrainSemantic.current
     if (status == TaskStatus.COMPLETADA) {
-        Pill("Completada", s.success.copy(alpha = 0.16f), s.success)
+        Pill("Completada", s.success)
     } else {
-        Pill("Pendiente", s.warning.copy(alpha = 0.18f), s.warning)
+        Pill("Pendiente", s.warning)
     }
 }
 
@@ -348,7 +431,7 @@ private fun axisUnit(d: Dimension): String = when (d) {
 }
 
 @Composable
-private fun TaskCard(task: TrackTask, onClick: (() -> Unit)? = null) {
+private fun TaskCard(task: TrackTask, pendingCta: String = "Llenar tarea →", onClick: (() -> Unit)? = null) {
     val s = LocalUsBrainSemantic.current
     val border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     val inner: @Composable ColumnScope.() -> Unit = {
@@ -393,7 +476,7 @@ private fun TaskCard(task: TrackTask, onClick: (() -> Unit)? = null) {
                 )
             } else if (onClick != null) {
                 Text(
-                    "Llenar tarea →",
+                    pendingCta,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold,
@@ -413,7 +496,7 @@ private fun TaskCard(task: TrackTask, onClick: (() -> Unit)? = null) {
 }
 
 @Composable
-private fun TrendChart(behavior: Behavior, modifier: Modifier = Modifier) {
+private fun TrendChart(behavior: Behavior, dimension: Dimension, modifier: Modifier = Modifier) {
     val s = LocalUsBrainSemantic.current
     val measurer = rememberTextMeasurer()
     val axisColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -421,8 +504,13 @@ private fun TrendChart(behavior: Behavior, modifier: Modifier = Modifier) {
     val gridColor = s.grid
     val baseC = s.baseline
     val intC = s.intervention
-    val baseline = behavior.baselineEntries.map { it.value }
-    val intervention = behavior.tasks.filter { it.taskType == TaskType.REGISTRO_AUTONOMO }.flatMap { task -> task.entries.filter { it.phase == Phase.INTERVENCION }.map { it.value } }
+    // Filtrado por dimensión: si la conducta tiene más de una actividad de registro autónomo
+    // (p. ej. una mide frecuencia y otra intensidad), cada una es una serie propia — nunca se
+    // mezclan escalas distintas en la misma línea de tendencia.
+    val baseline = behavior.baselineEntries.filter { it.dimension == dimension }.map { it.value }
+    val intervention = behavior.tasks
+        .filter { it.taskType == TaskType.REGISTRO_AUTONOMO && it.dimension == dimension }
+        .flatMap { task -> task.entries.filter { it.phase == Phase.INTERVENCION }.map { it.value } }
     val data = baseline + intervention
     val baselineDays = baseline.size
     Canvas(modifier.fillMaxWidth().height(150.dp)) {
@@ -469,8 +557,12 @@ private fun TrendChart(behavior: Behavior, modifier: Modifier = Modifier) {
     }
 }
 
+// La gráfica pertenece a la conducta, no a una actividad puntual: `dimension` decide qué
+// variable de las que mide la conducta se está mostrando (frecuencia, duración, intensidad…),
+// y es intercambiable cuando la conducta tiene más de una. Por defecto usa la dimensión
+// principal de la conducta para las vistas que no ofrecen selector propio.
 @Composable
-private fun ChartCard(behavior: Behavior) {
+private fun ChartCard(behavior: Behavior, dimension: Dimension = behavior.dimension) {
     val s = LocalUsBrainSemantic.current
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
@@ -486,7 +578,7 @@ private fun ChartCard(behavior: Behavior) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        "Tendencia · ${behavior.dimension.label} · ${behavior.type.label}",
+                        "Tendencia · ${dimension.label} · ${behavior.type.label}",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -494,14 +586,14 @@ private fun ChartCard(behavior: Behavior) {
                 PhasePill(if (behavior.baselineOpen) Phase.LINEA_BASE else Phase.INTERVENCION)
             }
             Spacer(Modifier.height(10.dp))
-            TrendChart(behavior)
+            TrendChart(behavior, dimension)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                LegendDot(s.baseline, "Línea base (${behavior.observationCount} obs.)")
+                LegendDot(s.baseline, "Línea base (${behavior.observationCountFor(dimension)} obs.)")
                 LegendDot(s.intervention, "Intervención")
             }
             Text(
-                "Eje X: observaciones · Eje Y: ${axisUnit(behavior.dimension)}",
+                "Eje X: observaciones · Eje Y: ${axisUnit(dimension)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
@@ -529,7 +621,11 @@ private fun LegendDot(color: Color, label: String) {
 private fun LoginScreen(state: PrototypeState) {
     val email = remember(state.loginRole) {
         mutableStateOf(
-            if (state.loginRole == Role.PATIENT) "ana.torres@usbbog.edu.co" else "e.patino@usb.edu.co",
+            when (state.loginRole) {
+                Role.PATIENT -> "ana.torres@usbbog.edu.co"
+                Role.THERAPIST -> "e.patino@usb.edu.co"
+                Role.ADMIN -> "admin@usbbog.edu.co"
+            },
         )
     }
     val pass = remember(state.loginRole) { mutableStateOf("claveDemo2026") }
@@ -551,12 +647,11 @@ private fun LoginScreen(state: PrototypeState) {
         )
         Spacer(Modifier.height(28.dp))
         SectionLabel("Ingresa como", Modifier.fillMaxWidth().padding(bottom = 8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            RoleChoiceCard(Role.PATIENT, state.loginRole == Role.PATIENT, Modifier.weight(1f)) {
-                state.loginRole = Role.PATIENT
-            }
-            RoleChoiceCard(Role.THERAPIST, state.loginRole == Role.THERAPIST, Modifier.weight(1f)) {
-                state.loginRole = Role.THERAPIST
+        // Los perfiles disponibles salen de state.roleProfiles: agregar un rol nuevo al catálogo
+        // lo hace aparecer aquí solo, sin tocar esta pantalla.
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            state.roleProfiles.forEach { profile ->
+                RoleChoiceCard(profile, state.loginRole == profile.role) { state.loginRole = profile.role }
             }
         }
         Spacer(Modifier.height(18.dp))
@@ -591,35 +686,31 @@ private fun LoginScreen(state: PrototypeState) {
 }
 
 @Composable
-private fun RoleChoiceCard(role: Role, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val badge = if (role == Role.PATIENT) Brand.Violet else Brand.Navy
+private fun RoleChoiceCard(profile: RoleProfile, selected: Boolean, onClick: () -> Unit) {
     val border = if (selected) {
         BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
     } else {
         BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     }
-    OutlinedCard(onClick = onClick, modifier = modifier, border = border) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth(), border = border) {
+        Row(
+            Modifier.padding(13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             Box(
-                Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(badge),
+                Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(Color(profile.badgeColor)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(if (role == Role.PATIENT) "P" else "T", color = Color.White, fontWeight = FontWeight.Bold)
+                Text(profile.displayName.first().uppercase(), color = Color.White, fontWeight = FontWeight.Bold)
             }
-            Text(
-                if (role == Role.PATIENT) "Paciente" else "Terapeuta",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                if (role == Role.PATIENT) {
-                    "Consulta y llena las tareas que asigna tu terapeuta"
-                } else {
-                    "Define conductas y asigna tareas de seguimiento"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Column(Modifier.weight(1f)) {
+                Text(profile.displayName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(profile.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (selected) {
+                Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
@@ -631,15 +722,15 @@ private fun TwoFactorScreen(state: PrototypeState) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        TextButton(onClick = { state.screen = Screen.LOGIN }, modifier = Modifier.align(Alignment.Start)) {
-            Text("← Volver")
-        }
+        CircleIconButton(onClick = { state.screen = Screen.LOGIN }) { NavGlyph("back", selected = false) }
         Spacer(Modifier.height(16.dp))
         Box(
-            Modifier.size(76.dp).clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.secondaryContainer),
+            Modifier.size(76.dp).clip(RoundedCornerShape(50))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(1.5.dp, MaterialTheme.colorScheme.secondary, RoundedCornerShape(50)),
             contentAlignment = Alignment.Center,
         ) {
-            Text("2FA", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSecondaryContainer)
+            Text("2FA", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
         }
         Spacer(Modifier.height(16.dp))
         Text(
@@ -686,23 +777,20 @@ private fun TwoFactorScreen(state: PrototypeState) {
 /* ----------------------------- paciente ----------------------------- */
 
 @Composable
-private fun PatientHomeScreen(state: PrototypeState) {
+private fun PatientHomeScreen(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit) {
     val p = state.me()
     val caseId = state.caseForPatient(p.id)
     val behaviors = if (caseId != null) state.behaviorsForCase(caseId) else emptyList()
     val done = p.tasks.filter { it.status == TaskStatus.COMPLETADA }
     ScreenScaffold {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column {
-                SectionLabel("Hoy")
-                Text("Hola, ${p.firstName}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            }
-            Avatar(p)
-        }
+        HomeHeader(
+            greeting = "Hola 👋",
+            name = p.firstName,
+            dark = dark,
+            onToggleTheme = onToggleTheme,
+            onLogout = { state.logout() },
+            avatar = { Avatar(p) },
+        )
         val pending = behaviors.flatMap { b -> state.tasksForBehavior(b.id).filter { it.status == TaskStatus.PENDIENTE } }
         Text(
             "Tienes ${pending.size} ${if (pending.size == 1) "tarea" else "tareas"} por registrar.",
@@ -726,8 +814,8 @@ private fun PatientHomeScreen(state: PrototypeState) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     SectionLabel("${b.name}", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Pill(if (b.type == BehaviorType.ADAPTATIVA) "Adaptativa" else "Desadaptativa", MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
-                        Pill(b.dimension.label, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
+                        Pill(if (b.type == BehaviorType.ADAPTATIVA) "Adaptativa" else "Desadaptativa", MaterialTheme.colorScheme.onSurfaceVariant)
+                        Pill(b.dimension.label, MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (behaviorPending.isNotEmpty()) {
                         behaviorPending.forEach { t -> TaskCard(t) { state.openTask(t.id) } }
@@ -753,9 +841,7 @@ private fun PatientHomeScreen(state: PrototypeState) {
 private fun PatientTaskScreen(state: PrototypeState) {
     val t = state.activeTask()
     ScreenScaffold {
-        TextButton(onClick = { state.screen = Screen.PATIENT_HOME }, contentPadding = PaddingValues(0.dp)) {
-            Text("← Mis tareas")
-        }
+        BackHeader("Mis tareas") { state.screen = Screen.PATIENT_HOME }
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(
@@ -1037,6 +1123,23 @@ private fun PatientProfileScreen(state: PrototypeState) {
 }
 
 @Composable
+private fun DiagnosisRow(dx: Cie10Diagnosis, onRemove: () -> Unit) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(dx.code, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                Text(dx.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            TextButton(onClick = onRemove) { Text("Quitar") }
+        }
+    }
+}
+
+@Composable
 private fun InfoRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1047,26 +1150,25 @@ private fun InfoRow(label: String, value: String) {
 /* ----------------------------- terapeuta ----------------------------- */
 
 @Composable
-private fun TherapistHomeScreen(state: PrototypeState) {
+private fun TherapistHomeScreen(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit) {
     val patients = state.patients
     val totalPending = patients.sumOf { p -> p.tasks.count { it.status == TaskStatus.PENDIENTE } }
     ScreenScaffold {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column {
-                SectionLabel("Terapeuta")
-                Text("José E. Patiño", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            }
-            Box(
-                Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(Brand.Navy),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("JP", color = Color.White, fontWeight = FontWeight.Bold)
-            }
-        }
+        HomeHeader(
+            greeting = "Hola 👋",
+            name = "José E. Patiño",
+            dark = dark,
+            onToggleTheme = onToggleTheme,
+            onLogout = { state.logout() },
+            avatar = {
+                Box(
+                    Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(Brand.Navy),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("JP", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+        )
         Text(
             "${patients.size} pacientes activos · $totalPending tareas pendientes de registro.",
             style = MaterialTheme.typography.bodyMedium,
@@ -1074,6 +1176,47 @@ private fun TherapistHomeScreen(state: PrototypeState) {
         )
         SectionLabel("Mis pacientes")
         patients.forEach { p -> PatientRow(p) { state.openPatient(p.id) } }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun TherapistProfileScreen(state: PrototypeState) {
+    ScreenScaffold {
+        Column(
+            Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(
+                Modifier.size(64.dp).clip(RoundedCornerShape(64.dp * 0.33f)).background(Brand.Navy),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("JP", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 22.sp)
+            }
+            Text("José E. Patiño", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(
+                "Terapeuta · Universidad de San Buenaventura",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        ElevatedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                InfoRow("Pacientes activos", "${state.patients.size}")
+                InfoRow("Autenticación", "2FA activada ✓")
+            }
+        }
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Text(
+                "Los datos clínicos de tus pacientes son información sensible. Solo tú y cada paciente asignado " +
+                    "pueden verlos (Ley 1581/2012).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(14.dp),
+            )
+        }
+        OutlinedButton(onClick = { state.logout() }, Modifier.fillMaxWidth()) { Text("Cerrar sesión") }
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -1110,13 +1253,80 @@ private fun PatientRow(p: Patient, onClick: () -> Unit) {
     }
 }
 
+/* ----------------------------- administrador ----------------------------- */
+
+@Composable
+private fun AdminHomeScreen(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit) {
+    val patients = state.patients
+    val totalPending = patients.sumOf { p -> p.tasks.count { it.status == TaskStatus.PENDIENTE } }
+    ScreenScaffold {
+        HomeHeader(
+            greeting = "Hola 👋",
+            name = "Administrador",
+            dark = dark,
+            onToggleTheme = onToggleTheme,
+            onLogout = { state.logout() },
+            avatar = {
+                Box(
+                    Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(Brand.Orange),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("AD", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+        )
+        Text(
+            "Panel del sistema · ${state.roleProfiles.size} perfiles configurados · $totalPending tareas pendientes.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatTile("${patients.size}", "pacientes activos", MaterialTheme.colorScheme.primary)
+            StatTile("${state.roleProfiles.size}", "perfiles del sistema", MaterialTheme.colorScheme.onSurface)
+        }
+        SectionLabel("Perfiles y permisos")
+        state.roleProfiles.forEach { profile -> RoleProfileCard(profile) }
+        SectionLabel("Pacientes en el sistema")
+        // El administrador hereda la ficha del terapeuta: mismo permiso de lectura sobre el caso.
+        patients.forEach { p -> PatientRow(p) { state.openPatient(p.id) } }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun RoleProfileCard(profile: RoleProfile) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(Color(profile.badgeColor)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(profile.displayName.first().uppercase(), color = Color.White, fontWeight = FontWeight.Bold)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(profile.displayName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    profile.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Pill("${profile.tabs.size} tabs", MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
 @Composable
 private fun TherapistPatientScreen(state: PrototypeState) {
     val p = state.activePatient()
     ScreenScaffold {
-        TextButton(onClick = { state.screen = Screen.THERAPIST_HOME }, contentPadding = PaddingValues(0.dp)) {
-            Text("← Pacientes")
-        }
+        BackHeader("Pacientes") { state.screen = state.currentProfile?.homeScreen ?: Screen.THERAPIST_HOME }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Avatar(p, 48.dp)
             Column(Modifier.weight(1f)) {
@@ -1130,52 +1340,332 @@ private fun TherapistPatientScreen(state: PrototypeState) {
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PhasePill(p.phase)
-            Pill(p.condition, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
+            Pill(p.condition, MaterialTheme.colorScheme.onSurfaceVariant)
+            p.diagnoses.forEach { dx -> Pill(dx.code, MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        Button(onClick = { state.startNewBehavior(p.id) }, Modifier.fillMaxWidth().height(50.dp)) {
-            Text("Nueva conducta")
+        // Los datos administrativos del paciente (diagnóstico CIE-10, etc.) se gestionan en su
+        // propia pantalla: aquí solo se ve un resumen (los códigos como pill arriba) para que
+        // esta vista se mantenga enfocada en las conductas del caso.
+        OutlinedButton(onClick = { state.screen = Screen.THERAPIST_PATIENT_INFO }, Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(if (p.diagnoses.isEmpty()) "Asignar diagnóstico (CIE-10)" else "Gestionar datos del paciente")
+                NavGlyph("forward", selected = false)
+            }
         }
         SectionLabel("Conductas del caso")
-        p.behaviors.forEach { behavior ->
-            OutlinedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column(Modifier.weight(1f)) {
-                            Text(behavior.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                            Text(behavior.type.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        PhasePill(if (behavior.baselineOpen) Phase.LINEA_BASE else Phase.INTERVENCION)
-                    }
-                    Text("${behavior.observationCount} observaciones de línea base · ${behavior.dimension.label}", style = MaterialTheme.typography.bodySmall)
+        if (p.behaviors.isEmpty()) {
+            Text(
+                "Aún no hay conductas definidas para este caso. Usa el botón + para crear la primera.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            p.behaviors.forEach { behavior -> BehaviorRow(behavior) { state.openBehaviorDetail(behavior.id) } }
+        }
+        Spacer(Modifier.height(72.dp)) // deja aire para que el FAB no tape la última tarjeta
+    }
+}
+
+@Composable
+private fun BehaviorRow(behavior: Behavior, onClick: () -> Unit) {
+    OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f)) {
+                    Text(behavior.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(behavior.type.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                PhasePill(if (behavior.baselineOpen) Phase.LINEA_BASE else Phase.INTERVENCION)
+            }
+            Text(
+                "${behavior.tasks.size} ${if (behavior.tasks.size == 1) "actividad" else "actividades"} · ${behavior.dimension.label}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TherapistPatientInfoScreen(state: PrototypeState) {
+    val p = state.activePatient()
+    ScreenScaffold {
+        BackHeader("Datos del paciente") { state.screen = Screen.THERAPIST_PATIENT }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Avatar(p, 48.dp)
+            Column(Modifier.weight(1f)) {
+                Text(p.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    "${p.age} años · ${p.program}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        ElevatedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                InfoRow("Condición en seguimiento", p.condition)
+                InfoRow("Fase actual", p.phase.label)
+                InfoRow("Conductas activas", "${p.behaviors.size}")
+            }
+        }
+        // Diagnóstico por CIE-10: nulo por defecto (lista vacía), el terapeuta lo asigna cuando
+        // corresponde y puede agregar más de un código si hay comorbilidad.
+        SectionLabel("Diagnóstico (CIE-10)")
+        if (p.diagnoses.isEmpty()) {
+            Text(
+                "Sin diagnóstico asignado todavía.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            p.diagnoses.forEach { dx -> DiagnosisRow(dx) { state.removeDiagnosis(p.id, dx.code) } }
+        }
+        DropdownField(
+            label = "Agregar diagnóstico",
+            selectedLabel = null,
+            placeholder = if (p.diagnoses.isEmpty()) "Selecciona un código CIE-10" else "Agregar otro código",
+            options = state.cie10Catalog.map { it.code to "${it.code} · ${it.label}" } + ("__custom__" to "+ Escribir otro código"),
+            onSelect = { code ->
+                if (code == "__custom__") {
+                    state.showNewDiagnosisForm = true
+                } else {
+                    val entry = state.cie10Catalog.first { it.code == code }
+                    state.assignDiagnosis(p.id, entry.code, entry.label)
+                }
+            },
+        )
+        if (state.showNewDiagnosisForm) {
+            OutlinedTextField(
+                state.draftDiagnosisCode, { state.draftDiagnosisCode = it }, Modifier.fillMaxWidth(),
+                placeholder = { Text("Código (ej.: F41.1)") }, singleLine = true,
+            )
+            OutlinedTextField(
+                state.draftDiagnosisLabel, { state.draftDiagnosisLabel = it }, Modifier.fillMaxWidth(),
+                placeholder = { Text("Descripción del diagnóstico") }, singleLine = true,
+            )
+            Button(onClick = {
+                if (state.assignDiagnosis(p.id, state.draftDiagnosisCode, state.draftDiagnosisLabel)) {
+                    state.showNewDiagnosisForm = false
+                    state.draftDiagnosisCode = ""
+                    state.draftDiagnosisLabel = ""
+                }
+            }) { Text("Guardar diagnóstico") }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+/**
+ * Selector de pestañas tipo segmented control: un riel en píldora con el segmento activo
+ * resaltado por relleno + borde de acento, justo encima del panel de contenido.
+ *
+ * Se abandonó el intento anterior de "pestaña-carpeta fundida con el panel + vidrio esmerilado":
+ * la costura entre pestaña y panel era frágil (ya rompió una vez, dejando las pestañas
+ * invisibles) y el efecto de vidrio, sobre los fondos planos de esta app, no se leía bien. Este
+ * patrón es más simple, más robusto y dice con claridad cuál pestaña está activa.
+ */
+@Composable
+private fun <T> TabbedPanel(
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val segmentShape = RoundedCornerShape(50)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(segmentShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            options.forEach { (value, label) ->
+                val isSelected = selected == value
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(segmentShape)
+                        .background(if (isSelected) MaterialTheme.colorScheme.surface else Color.Transparent)
+                        // El color del borde —no el relleno— es lo que marca cuál está
+                        // seleccionada, siguiendo el mismo lenguaje del resto de la app.
+                        .border(
+                            if (isSelected) 1.5.dp else 0.dp,
+                            if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                            segmentShape,
+                        )
+                        .clickable { onSelect(value) }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Text(
-                        if (behavior.baselineOpen) "Línea base abierta: las nuevas tareas registrarán observaciones iniciales."
-                        else "Línea base cerrada el ${behavior.baselineClosedOn}: los datos quedan como referencia fija.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        label,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    if (behavior.baselineOpen) {
-                        OutlinedButton(onClick = { state.closeBaseline(behavior.id) }, Modifier.fillMaxWidth()) {
-                            Text("Cerrar línea base")
-                        }
-                    }
-                    Button(onClick = { state.startNewTask(p.id, behavior.id) }, Modifier.fillMaxWidth()) {
-                        Text("Nueva tarea para esta conducta")
-                    }
-                    behavior.tasks.forEach { task -> TaskCard(task) }
                 }
             }
+        }
+        ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+        }
+    }
+}
+
+@Composable
+private fun TherapistBehaviorScreen(state: PrototypeState) {
+    val behavior = state.activeBehavior()
+    val patient = state.activePatient()
+    ScreenScaffold {
+        BackHeader(behavior.name) { state.screen = Screen.THERAPIST_PATIENT }
+        Text(
+            "Paciente: ${patient.name}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PhasePill(if (behavior.baselineOpen) Phase.LINEA_BASE else Phase.INTERVENCION)
+            Pill(behavior.type.label, MaterialTheme.colorScheme.onSurfaceVariant)
+            Pill(behavior.dimension.label, MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text(
+            "${behavior.observationCount} observaciones de línea base · " + if (behavior.baselineOpen) {
+                "línea base abierta: las nuevas actividades registrarán observaciones iniciales."
+            } else {
+                "línea base cerrada el ${behavior.baselineClosedOn}: los datos quedan como referencia fija."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (behavior.baselineOpen) {
+            OutlinedButton(onClick = { state.closeBaseline(behavior.id) }, Modifier.fillMaxWidth()) {
+                Text("Cerrar línea base")
+            }
+        }
+        // Pestañas: "Actividades" (donde vive el botón + de crear) y "Análisis gráfico" (la
+        // evolución de la conducta) separan gestión de datos y su lectura visual, en vez de
+        // apilar todo en una sola pantalla larga. El selector y su contenido comparten una
+        // sola caja redondeada, como una unión continua entre el botón y el panel.
+        TabbedPanel(
+            options = listOf(BehaviorTab.ACTIVIDADES to "Actividades", BehaviorTab.ANALISIS to "Análisis gráfico"),
+            selected = state.behaviorDetailTab,
+            onSelect = { state.behaviorDetailTab = it },
+        ) {
+            when (state.behaviorDetailTab) {
+                BehaviorTab.ACTIVIDADES -> {
+                    if (behavior.tasks.isEmpty()) {
+                        Text(
+                            "Todavía no hay actividades para esta conducta. Usa el botón + para crear la primera.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        behavior.tasks.forEach { task -> TaskCard(task, onClick = { state.openTaskDetail(task.id) }, pendingCta = "Ver detalle →") }
+                    }
+                }
+                BehaviorTab.ANALISIS -> {
+                    // La gráfica es de la conducta (no de una actividad puntual): en caso único
+                    // cada variable evaluada —frecuencia, duración, intensidad…— es una serie
+                    // propia, así que cuando la conducta mide más de una se ofrecen como
+                    // pestañas intercambiables.
+                    val dims = behavior.dimensions
+                    var selectedDimension by remember(behavior.id) { mutableStateOf(dims.first()) }
+                    if (dims.size > 1) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            dims.forEach { d -> TabChip(selectedDimension == d, { selectedDimension = d }, d.label) }
+                        }
+                    }
+                    ChartCard(behavior, selectedDimension)
+                }
+            }
+        }
+        Spacer(Modifier.height(72.dp)) // deja aire para que el FAB no tape el panel
+    }
+}
+
+@Composable
+private fun TherapistTaskDetailScreen(state: PrototypeState) {
+    val task = state.activeTask()
+    val behavior = state.activeBehavior()
+    ScreenScaffold {
+        BackHeader(task.title) { state.screen = Screen.THERAPIST_BEHAVIOR }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SectionLabel("${task.taskType.label} · ${behavior.name}", modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            StatusPill(task.status)
+        }
+        Text(task.instructions, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val measureLabel = if (task.taskType == TaskType.REGISTRO_AUTONOMO) "${task.dimension.label} (${task.dimension.unit})" else task.metricUnit?.label.orEmpty()
+        Text(
+            "Fase: ${task.phase.label} · Medición: $measureLabel" + (task.dueDate?.let { " · Vence: $it" } ?: ""),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (task.feedsSeries) {
+            // La gráfica vive a nivel de conducta (ver TherapistBehaviorScreen): esta actividad
+            // solo aporta observaciones a la dimensión "${task.dimension.label}" de esa serie.
+            Text(
+                "Esta actividad alimenta la gráfica de \"${behavior.name}\" en su dimensión ${task.dimension.label}; consulta la evolución completa en el detalle de la conducta.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        SectionLabel("Historial de registros")
+        if (task.entries.isEmpty()) {
+            Text(
+                "Aún no hay registros para esta actividad.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            task.entries.reversed().forEach { entry -> TaskEntryRow(entry, task) }
         }
         Spacer(Modifier.height(24.dp))
     }
 }
 
 @Composable
+private fun TaskEntryRow(entry: TaskEntry, task: TrackTask) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(entry.date, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                if (entry.note.isNotBlank()) {
+                    Text(
+                        entry.note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            val label = if (task.taskType != TaskType.REGISTRO_AUTONOMO && task.metricUnit == MetricUnit.SOLO_COMPLETADO) {
+                "Completada"
+            } else {
+                "${fmt(entry.value)} ${taskUnitLabel(task)}"
+            }
+            Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+@Composable
 private fun TherapistNewBehaviorScreen(state: PrototypeState) {
     ScreenScaffold {
-        TextButton(onClick = { state.screen = Screen.THERAPIST_HOME }, contentPadding = PaddingValues(0.dp)) {
-            Text("← Cancelar")
-        }
-        Text("Nueva conducta", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        BackHeader("Nueva conducta") { state.screen = Screen.THERAPIST_PATIENT }
         Text(
             "Primero define la conducta del caso. Después podrás revisar su línea base y asignar tareas.",
             style = MaterialTheme.typography.bodyMedium,
@@ -1207,17 +1697,18 @@ private fun TherapistNewBehaviorScreen(state: PrototypeState) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BehaviorType.entries.forEach { type ->
                     val tint = if (type == BehaviorType.ADAPTATIVA) s.success else MaterialTheme.colorScheme.error
-                    FilterChip(
+                    TabChip(
                         selected = state.draftBehaviorType == type,
                         onClick = {
                             state.draftBehaviorType = type
                             if (type == BehaviorType.ADAPTATIVA) {
-                                state.draftBehavioralFunction = BehavioralFunction.NO_APLICA
+                                state.draftBehavioralFunctionId = NO_APLICA_FUNCTION_ID
+                                state.showNewFunctionForm = false
                                 state.draftReplacementBehaviorId = null
                             }
                         },
-                        label = { Text(type.label) },
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = tint.copy(alpha = 0.18f), selectedLabelColor = tint),
+                        label = type.label,
+                        accent = tint,
                     )
                 }
             }
@@ -1245,12 +1736,33 @@ private fun TherapistNewBehaviorScreen(state: PrototypeState) {
             }
         }
         if (state.draftBehaviorType == BehaviorType.DESADAPTATIVA) {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FieldLabel("Función conductual")
+                // Catálogo editable como la categoría: si el análisis funcional del caso no
+                // encaja en el catálogo semilla, "+ Nueva función" la registra al vuelo.
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BehavioralFunction.entries.forEach { fn ->
-                        FilterChip(state.draftBehavioralFunction == fn, { state.draftBehavioralFunction = fn }, label = { Text(fn.label) })
+                    state.behavioralFunctions.forEach { fn ->
+                        TabChip(
+                            state.draftBehavioralFunctionId == fn.id,
+                            { state.draftBehavioralFunctionId = fn.id; state.showNewFunctionForm = false },
+                            fn.label,
+                        )
                     }
+                    TabChip(state.showNewFunctionForm, { state.showNewFunctionForm = !state.showNewFunctionForm }, "+ Nueva función")
+                }
+                if (state.showNewFunctionForm) {
+                    OutlinedTextField(
+                        state.draftNewFunctionLabel, { state.draftNewFunctionLabel = it }, Modifier.fillMaxWidth(),
+                        placeholder = { Text("Nombre de la función (ej.: Autorregulación)") }, singleLine = true,
+                    )
+                    Button(onClick = {
+                        val id = state.createBehavioralFunction(state.draftNewFunctionLabel)
+                        if (id != null) {
+                            state.draftBehavioralFunctionId = id
+                            state.showNewFunctionForm = false
+                            state.draftNewFunctionLabel = ""
+                        }
+                    }) { Text("Guardar función") }
                 }
             }
             val replacementOptions = state.adaptiveBehaviorsFor(state.draftPatientId)
@@ -1271,10 +1783,7 @@ private fun TherapistNewBehaviorScreen(state: PrototypeState) {
 @Composable
 private fun TherapistNewTaskScreen(state: PrototypeState) {
     ScreenScaffold {
-        TextButton(onClick = { state.screen = Screen.THERAPIST_HOME }, contentPadding = PaddingValues(0.dp)) {
-            Text("← Cancelar")
-        }
-        Text("Nueva actividad", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        BackHeader("Nueva actividad") { state.screen = Screen.THERAPIST_BEHAVIOR }
         Text(
             "Se agrega sobre la conducta actual; puedes crear las actividades que necesites.",
             style = MaterialTheme.typography.bodyMedium,
@@ -1297,13 +1806,13 @@ private fun TherapistNewTaskScreen(state: PrototypeState) {
             FieldLabel("Fase de la actividad")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Phase.entries.forEach { phase ->
-                    FilterChip(
+                    TabChip(
                         selected = state.draftTaskPhase == phase,
                         onClick = {
                             state.draftTaskPhase = phase
                             state.draftReminderActive = phase == Phase.INTERVENCION
                         },
-                        label = { Text(phase.label) },
+                        label = phase.label,
                     )
                 }
             }
@@ -1326,7 +1835,7 @@ private fun TherapistNewTaskScreen(state: PrototypeState) {
             FieldLabel("Tipo de actividad")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TaskType.entries.forEach { type ->
-                    FilterChip(state.draftTaskType == type, { state.draftTaskType = type }, label = { Text(type.label) })
+                    TabChip(state.draftTaskType == type, { state.draftTaskType = type }, type.label)
                 }
             }
         }
@@ -1335,7 +1844,7 @@ private fun TherapistNewTaskScreen(state: PrototypeState) {
                 FieldLabel("Tipo de medición")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Dimension.entries.forEach { dimension ->
-                        FilterChip(state.draftTaskDimension == dimension, { state.draftTaskDimension = dimension }, label = { Text(dimension.label) })
+                        TabChip(state.draftTaskDimension == dimension, { state.draftTaskDimension = dimension }, dimension.label)
                     }
                 }
             }
@@ -1344,7 +1853,7 @@ private fun TherapistNewTaskScreen(state: PrototypeState) {
                 FieldLabel("Cómo se mide cumplirla")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MetricUnit.entries.forEach { unit ->
-                        FilterChip(state.draftMetricUnit == unit, { state.draftMetricUnit = unit }, label = { Text(unit.label) })
+                        TabChip(state.draftMetricUnit == unit, { state.draftMetricUnit = unit }, unit.label)
                     }
                 }
             }
@@ -1356,8 +1865,8 @@ private fun TherapistNewTaskScreen(state: PrototypeState) {
         Column {
             FieldLabel("¿Se repite?")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(!state.draftIsRecurring, { state.draftIsRecurring = false }, label = { Text("Una sola vez") })
-                FilterChip(state.draftIsRecurring, { state.draftIsRecurring = true }, label = { Text("Recurrente") })
+                TabChip(!state.draftIsRecurring, { state.draftIsRecurring = false }, "Una sola vez")
+                TabChip(state.draftIsRecurring, { state.draftIsRecurring = true }, "Recurrente")
             }
         }
         if (state.draftIsRecurring) {
@@ -1365,7 +1874,7 @@ private fun TherapistNewTaskScreen(state: PrototypeState) {
                 FieldLabel("Frecuencia")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FRECUENCIAS.forEach { f ->
-                        FilterChip(state.draftFrequency == f, { state.draftFrequency = f }, label = { Text(f) })
+                        TabChip(state.draftFrequency == f, { state.draftFrequency = f }, f)
                     }
                 }
             }
@@ -1383,8 +1892,8 @@ private fun TherapistNewTaskScreen(state: PrototypeState) {
         Column {
             FieldLabel("Recordatorio")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(!state.draftReminderActive, { state.draftReminderActive = false }, label = { Text("Desactivado") })
-                FilterChip(state.draftReminderActive, { state.draftReminderActive = true }, label = { Text("Activado") })
+                TabChip(!state.draftReminderActive, { state.draftReminderActive = false }, "Desactivado")
+                TabChip(state.draftReminderActive, { state.draftReminderActive = true }, "Activado")
             }
         }
         state.assignError?.let {
@@ -1420,7 +1929,8 @@ private fun TherapistAssignedScreen(state: PrototypeState) {
             textAlign = TextAlign.Center,
         )
         Surface(
-            color = s.intervention.copy(alpha = 0.12f),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, s.intervention),
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -1445,31 +1955,13 @@ private fun TherapistAssignedScreen(state: PrototypeState) {
                 Text("Fase: ${t.phase.label} · $recurrence", style = MaterialTheme.typography.bodySmall)
             }
         }
-        Button(onClick = { state.openPatient(p.id) }, Modifier.fillMaxWidth().height(50.dp)) {
+        // Va directo al detalle de la conducta (no solo a la ficha del paciente): ahí es
+        // donde vive la actividad recién asignada, en línea con el flujo de drill-down.
+        Button(onClick = { state.openBehaviorDetail(t.behaviorId) }, Modifier.fillMaxWidth().height(50.dp)) {
             Text("Ver ficha de ${p.firstName}")
         }
         OutlinedButton(onClick = { state.previewAsPatient(p.id) }, Modifier.fillMaxWidth()) {
             Text("Previsualizar como paciente")
-        }
-        Spacer(Modifier.height(24.dp))
-    }
-}
-
-@Composable
-private fun TherapistProgressScreen(state: PrototypeState) {
-    ScreenScaffold {
-        Text("Análisis de tendencias", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text(
-            "Módulo de seguimiento · evolución de cada caso en plano cartesiano.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        state.patients.forEach { p ->
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Avatar(p, 30.dp)
-                Text(p.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            }
-            ChartCard(p)
         }
         Spacer(Modifier.height(24.dp))
     }

@@ -3,6 +3,7 @@ package org.usbrain.project
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -122,12 +123,14 @@ fun UsBrainLockup(markSize: Dp = 44.dp, showTagline: Boolean = true) {
     }
 }
 
-/** Placa circular de "éxito" con un check dibujado. */
+/** Placa circular de "éxito" con un check dibujado: fondo neutro + anillo de color, sin lavado pálido. */
 @Composable
 fun SuccessBadge(size: Dp = 84.dp) {
     val color = LocalUsBrainSemantic.current.success
     Box(
-        Modifier.size(size).clip(RoundedCornerShape(size / 2)).background(color.copy(alpha = 0.16f)),
+        Modifier.size(size).clip(RoundedCornerShape(size / 2))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(2.dp, color, RoundedCornerShape(size / 2)),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.size(size * 0.42f)) {
@@ -170,6 +173,16 @@ fun NavGlyph(kind: String, selected: Boolean) {
                 drawLine(tint, Offset(w * 0.5f, h * 0.18f), Offset(w * 0.5f, h * 0.82f), strokeWidth = w * 0.11f, cap = StrokeCap.Round)
                 drawLine(tint, Offset(w * 0.18f, h * 0.5f), Offset(w * 0.82f, h * 0.5f), strokeWidth = w * 0.11f, cap = StrokeCap.Round)
             }
+            // Chevron simple (como "<", el espejo de ">"): sin vástago, más cercano al ícono de
+            // volver de iOS/Android que a una flecha completa — se ve más limpio como botón.
+            "back" -> drawPath(Path().apply {
+                moveTo(w * 0.62f, h * 0.20f); lineTo(w * 0.34f, h * 0.5f); lineTo(w * 0.62f, h * 0.80f)
+            }, tint, style = stroke)
+            // Espejo de "back": para llamadas a la acción de "ir a…" en botones/enlaces, en vez
+            // de depender del carácter "→" de la fuente.
+            "forward" -> drawPath(Path().apply {
+                moveTo(w * 0.38f, h * 0.20f); lineTo(w * 0.66f, h * 0.5f); lineTo(w * 0.38f, h * 0.80f)
+            }, tint, style = stroke)
         }
     }
 }

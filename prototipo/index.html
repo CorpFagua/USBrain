@@ -11,19 +11,19 @@
     --violet:#7B66C2;
     --navy:#0F2540;
 
-    --backdrop:#EFEAE2;
-    --backdrop-2:#E4DccF;
-    --paper:#FAF8F5;
-    --surface:#FFFFFF;
-    --surface-2:#F5F0E9;
-    --ink:#1C2836;
-    --muted:#736A5C;
-    --line:#E7E0D5;
+    --backdrop:#F0F1F2;
+    --backdrop-2:#E4E6E8;
+    --paper:#FFFFFF;
+    --surface:#F7F7F8;
+    --surface-2:#EDEEEF;
+    --ink:#16181C;
+    --muted:#53575C;
+    --line:#E4E6E8;
     --bezel:#0F2540;
     --bezel-edge:#233953;
 
-    --good:#2FA36B;
-    --pending:#C97A16;
+    --good:#1F8F5C;
+    --pending:#8A5900;
 
     --ring:rgba(255,122,0,.45);
     --shadow:0 18px 50px -18px rgba(15,37,64,.35);
@@ -32,35 +32,35 @@
   }
   @media (prefers-color-scheme:dark){
     :root:not([data-theme="light"]){
-      --backdrop:#081221;
-      --backdrop-2:#0c1c30;
-      --paper:#0C1B2C;
-      --surface:#122437;
-      --surface-2:#182f45;
-      --ink:#E9F0F7;
-      --muted:#9BAFC2;
-      --line:#243c53;
+      --backdrop:#000000;
+      --backdrop-2:#131415;
+      --paper:#000000;
+      --surface:#121212;
+      --surface-2:#1C1C1E;
+      --ink:#F2F3F4;
+      --muted:#C7CBCF;
+      --line:#303234;
       --bezel:#1b3350;
       --bezel-edge:#2c4a6b;
-      --good:#4CC98C;
-      --pending:#E1A33F;
+      --good:#43C685;
+      --pending:#E6AC4F;
       --shadow:0 18px 50px -18px rgba(0,0,0,.65);
       --shadow-sm:0 6px 18px -8px rgba(0,0,0,.55);
     }
   }
   :root[data-theme="dark"]{
-    --backdrop:#081221;
-    --backdrop-2:#0c1c30;
-    --paper:#0C1B2C;
-    --surface:#122437;
-    --surface-2:#182f45;
-    --ink:#E9F0F7;
-    --muted:#9BAFC2;
-    --line:#243c53;
+    --backdrop:#000000;
+    --backdrop-2:#131415;
+    --paper:#000000;
+    --surface:#121212;
+    --surface-2:#1C1C1E;
+    --ink:#F2F3F4;
+    --muted:#C7CBCF;
+    --line:#303234;
     --bezel:#1b3350;
     --bezel-edge:#2c4a6b;
-    --good:#4CC98C;
-    --pending:#E1A33F;
+    --good:#43C685;
+    --pending:#E6AC4F;
     --shadow:0 18px 50px -18px rgba(0,0,0,.65);
     --shadow-sm:0 6px 18px -8px rgba(0,0,0,.55);
   }
@@ -112,17 +112,6 @@
   }
   .topbar-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
-  .seg{display:inline-flex;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:4px}
-  .seg button{
-    padding:7px 14px;border-radius:999px;font-size:.82rem;font-weight:600;color:var(--muted);
-    transition:background .15s,color .15s;white-space:nowrap;
-  }
-  .seg button[aria-pressed="true"]{background:var(--navy);color:#fff}
-  :root[data-theme="dark"] .seg button[aria-pressed="true"]{background:var(--orange);color:#231200}
-  @media (prefers-color-scheme:dark){
-    :root:not([data-theme="light"]) .seg button[aria-pressed="true"]{background:var(--orange);color:#231200}
-  }
-
   .ghost-btn{
     display:inline-flex;align-items:center;gap:7px;
     padding:8px 14px;border-radius:999px;border:1px solid var(--line);
@@ -165,22 +154,24 @@
   .view{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
   .view::-webkit-scrollbar{width:0}
   .pad{padding:20px 20px 28px}
-  .pad-b{padding-bottom:96px}
+  .pad-b{padding-bottom:104px}
 
   .tabbar{
-    flex:none;position:absolute;left:13px;right:13px;bottom:13px;
-    height:74px;border-radius:0 0 40px 40px;
+    flex:none;position:absolute;left:18px;right:18px;bottom:18px;
+    height:68px;border-radius:999px;
     background:color-mix(in srgb,var(--surface) 92%,transparent);
     backdrop-filter:blur(10px);
-    border-top:1px solid var(--line);
-    display:flex;align-items:center;justify-content:space-around;padding:0 6px 8px;
+    border:1px solid var(--line);
+    box-shadow:var(--shadow-sm);
+    display:flex;align-items:center;justify-content:space-around;padding:6px;
   }
   .tabbar button{
     display:flex;flex-direction:column;align-items:center;gap:3px;
-    font-size:.63rem;font-weight:600;color:var(--muted);padding:8px 10px;border-radius:14px;flex:1;
+    font-size:.63rem;font-weight:600;color:var(--muted);padding:8px 14px;border-radius:999px;flex:1;
+    border:1.5px solid transparent;transition:border-color .15s,color .15s;
   }
   .tabbar button svg{width:22px;height:22px}
-  .tabbar button[aria-current="true"]{color:var(--orange)}
+  .tabbar button[aria-current="true"]{color:var(--orange);border-color:var(--orange)}
 
   /* ---------- generic ui ---------- */
   .eyebrow{font-size:.66rem;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
@@ -216,10 +207,10 @@
     font-size:.7rem;font-weight:700;letter-spacing:.02em;
   }
   .pill.dot::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
-  .pill.pending{background:color-mix(in srgb,var(--pending) 15%,transparent);color:var(--pending)}
-  .pill.done{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
-  .pill.base{background:color-mix(in srgb,var(--coral) 16%,transparent);color:var(--coral)}
-  .pill.interv{background:color-mix(in srgb,var(--violet) 18%,transparent);color:var(--violet)}
+  .pill.pending{background:var(--surface);border:1px solid var(--pending);color:var(--pending)}
+  .pill.done{background:var(--surface);border:1px solid var(--good);color:var(--good)}
+  .pill.base{background:var(--surface);border:1px solid var(--coral);color:var(--coral)}
+  .pill.interv{background:var(--surface);border:1px solid var(--violet);color:var(--violet)}
 
   .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
   .field label{font-size:.8rem;font-weight:700}
@@ -238,7 +229,7 @@
     padding:9px 13px;border-radius:12px;border:1px solid var(--line);background:var(--surface);
     font-size:.82rem;font-weight:600;color:var(--muted);transition:all .13s;
   }
-  .chip[aria-pressed="true"]{border-color:var(--orange);background:color-mix(in srgb,var(--orange) 12%,transparent);color:var(--orange-deep)}
+  .chip[aria-pressed="true"]{border-color:var(--orange);background:var(--surface);color:var(--orange-deep)}
   :root[data-theme="dark"] .chip[aria-pressed="true"]{color:var(--orange)}
 
   .avatar{
@@ -272,16 +263,16 @@
 
   .banner{
     display:flex;gap:10px;align-items:flex-start;
-    background:color-mix(in srgb,var(--violet) 12%,transparent);
-    border:1px solid color-mix(in srgb,var(--violet) 30%,transparent);
+    background:var(--surface);
+    border:1px solid var(--violet);
     border-radius:14px;padding:12px 13px;font-size:.83rem;
   }
-  .banner.ok{background:color-mix(in srgb,var(--good) 12%,transparent);border-color:color-mix(in srgb,var(--good) 32%,transparent)}
+  .banner.ok{background:var(--surface);border-color:var(--good)}
   .banner svg{width:18px;height:18px;flex:none;margin-top:1px}
 
   .success-check{
     width:82px;height:82px;border-radius:50%;margin:0 auto;
-    background:color-mix(in srgb,var(--good) 16%,transparent);
+    background:var(--surface);border:2px solid var(--good);
     display:flex;align-items:center;justify-content:center;
     animation:pop .4s cubic-bezier(.2,1.3,.5,1);
   }
@@ -334,18 +325,9 @@
       </div>
     </div>
     <div class="topbar-actions">
-      <div class="seg" role="group" aria-label="Cambio rápido de sesión">
-        <button data-jump="login" aria-pressed="true">Inicio de sesión</button>
-        <button data-jump="paciente" aria-pressed="false">Sesión paciente</button>
-        <button data-jump="terapeuta" aria-pressed="false">Sesión terapeuta</button>
-      </div>
       <button class="ghost-btn" id="themeBtn" aria-label="Cambiar tema">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg>
         Tema
-      </button>
-      <button class="ghost-btn" id="resetBtn">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
-        Reiniciar demo
       </button>
     </div>
   </header>
@@ -502,27 +484,8 @@ document.getElementById('themeBtn').addEventListener('click',()=>{
   S.theme = cur==='dark'?'light':'dark';
   applyTheme();save();
 });
-document.getElementById('resetBtn').addEventListener('click',()=>{
-  const t=S.theme; S=seed(); S.theme=t; save(); render();
-});
-
 /* ============ navegación ============ */
 function go(screen,opts={}){ S.screen=screen; Object.assign(S,opts); save(); render(); }
-
-document.querySelectorAll('[data-jump]').forEach(b=>{
-  b.addEventListener('click',()=>{
-    const j=b.dataset.jump;
-    if(j==='login'){ S.role=null; go('login'); }
-    if(j==='paciente'){ S.role='paciente'; S.me='ana'; S.activePatient='ana'; S.tab='inicio'; go('patientHome'); }
-    if(j==='terapeuta'){ S.role='terapeuta'; S.tab='pacientes'; go('therapistHome'); }
-  });
-});
-function syncSeg(){
-  const map={login:'login',patientHome:'paciente',patientTask:'paciente',patientDone:'paciente',patientProgress:'paciente',
-    therapistHome:'terapeuta',therapistPatient:'terapeuta',therapistNewBehavior:'terapeuta',therapistNewTask:'terapeuta',therapistAssigned:'terapeuta',therapistProgress:'terapeuta','2fa':'login'};
-  const cur=map[S.screen]||'login';
-  document.querySelectorAll('[data-jump]').forEach(b=>b.setAttribute('aria-pressed', String(b.dataset.jump===cur)));
-}
 
 /* ============ helpers ui ============ */
 const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -656,7 +619,7 @@ function screen2fa(){
   return `<div class="pad fade" style="display:flex;flex-direction:column;min-height:100%">
     <button class="tiny muted" data-act="back-login" style="align-self:flex-start;font-weight:600">← Volver</button>
     <div style="text-align:center;margin:26px 0 10px">
-      <div class="success-check" style="background:color-mix(in srgb,var(--navy) 12%,transparent)">
+      <div class="success-check" style="background:var(--surface);border-color:var(--navy)">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--navy)" stroke-width="2" stroke-linecap="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
       </div>
       <h2 class="h-screen" style="margin-top:16px">Verificación en dos pasos</h2>
@@ -678,12 +641,12 @@ function screenPatientHome(){
   const done=p.tasks.filter(t=>t.status==='completada');
   const streak=3+done.length;
   return `<div class="view-inner"><div class="pad pad-b fade">
-    <div class="between">
-      <div>
-        <p class="eyebrow">${esc(todayStr())}</p>
-        <h1 class="h-screen">${greeting()}, ${p.name.split(' ')[0]}</h1>
-      </div>
+    <div class="row" style="gap:12px;align-items:center">
       <span class="avatar" style="background:${p.color}">${initials(p.name)}</span>
+      <div>
+        <p class="eyebrow">${greeting()} 👋</p>
+        <h1 class="h-screen">${p.name.split(' ')[0]}</h1>
+      </div>
     </div>
     <p class="sub" style="margin-bottom:16px">Tienes <b>${pend.length} tarea${pend.length===1?'':'s'}</b> por registrar hoy.</p>
 
@@ -806,9 +769,9 @@ function screenTherapistHome(){
   const list=Object.values(S.patients);
   const totalPend=list.reduce((a,p)=>a+p.tasks.filter(t=>t.status==='pendiente').length,0);
   return `<div class="view-inner"><div class="pad pad-b fade">
-    <div class="between">
-      <div><p class="eyebrow">Terapeuta</p><h1 class="h-screen">José E. Patiño</h1></div>
+    <div class="row" style="gap:12px;align-items:center">
       <span class="avatar" style="background:var(--navy)">JP</span>
+      <div><p class="eyebrow">Hola 👋</p><h1 class="h-screen">José E. Patiño</h1></div>
     </div>
     <p class="sub" style="margin-bottom:16px">${list.length} pacientes activos · ${totalPend} tareas pendientes de registro.</p>
 
@@ -1107,7 +1070,6 @@ function render(){
   v.scrollTop=0;
   renderTabs();
   bind();
-  syncSeg();
   const n=NOTES[S.screen]||NOTES.login;
   document.getElementById('noteTitle').textContent=n.t;
   document.getElementById('noteMeta').textContent=n.m;
