@@ -183,6 +183,13 @@ fun NavGlyph(kind: String, selected: Boolean) {
             "forward" -> drawPath(Path().apply {
                 moveTo(w * 0.38f, h * 0.20f); lineTo(w * 0.66f, h * 0.5f); lineTo(w * 0.38f, h * 0.80f)
             }, tint, style = stroke)
+            // Tres líneas horizontales: pestaña de "Historial"/lista, distinta de "chart" (que
+            // ya se usa para la gráfica de progreso).
+            "list" -> {
+                listOf(0.28f, 0.5f, 0.72f).forEach { y ->
+                    drawLine(tint, Offset(w * 0.16f, h * y), Offset(w * 0.84f, h * y), strokeWidth = w * 0.09f, cap = StrokeCap.Round)
+                }
+            }
         }
     }
 }

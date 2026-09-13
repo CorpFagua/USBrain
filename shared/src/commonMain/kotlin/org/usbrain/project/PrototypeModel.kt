@@ -40,7 +40,11 @@ enum class MetricUnit(val label: String) {
 
 enum class Screen {
     LOGIN, TWO_FACTOR,
-    PATIENT_HOME, PATIENT_TASK, PATIENT_DONE, PATIENT_PROGRESS, PATIENT_PROFILE,
+    // PATIENT_HOME es solo "tareas de hoy". PATIENT_BEHAVIORS es la pestaña "Historial": lista
+    // las conductas del caso; tocar una lleva a PATIENT_BEHAVIOR (todas sus tareas), y de ahí a
+    // PATIENT_TASK_HISTORY (todos los registros de esa tarea — puede tener varios). Nada de eso
+    // se mezcla en Inicio.
+    PATIENT_HOME, PATIENT_BEHAVIORS, PATIENT_BEHAVIOR, PATIENT_TASK, PATIENT_TASK_HISTORY, PATIENT_DONE, PATIENT_PROGRESS, PATIENT_PROFILE,
     // El terapeuta no tiene una pantalla de "progreso" aparte: al trabajar con diseño de caso
     // único, el análisis gráfico vive como pestaña dentro del detalle de la conducta
     // (THERAPIST_BEHAVIOR). THERAPIST_PATIENT_INFO es la ficha administrativa del paciente
@@ -82,6 +86,7 @@ private fun defaultRoleProfiles(): List<RoleProfile> = listOf(
         homeScreen = Screen.PATIENT_HOME,
         tabs = listOf(
             NavTab(Screen.PATIENT_HOME, "Inicio", "home"),
+            NavTab(Screen.PATIENT_BEHAVIORS, "Historial", "list"),
             NavTab(Screen.PATIENT_PROGRESS, "Progreso", "chart"),
             NavTab(Screen.PATIENT_PROFILE, "Perfil", "person"),
         ),
@@ -377,6 +382,16 @@ class PrototypeState {
         taskInputValue = if (task.taskType != TaskType.REGISTRO_AUTONOMO && task.metricUnit == MetricUnit.SOLO_COMPLETADO) 1.0 else 0.0
         taskNote = ""
         screen = Screen.PATIENT_TASK
+    }
+
+    fun openPatientBehavior(id: String) { activeBehaviorId = id; screen = Screen.PATIENT_BEHAVIOR }
+
+    // El historial (todos los registros de una tarea) solo se llega a él desde el detalle de su
+    // conducta, para que "volver" tenga un único destino y no haya que recordar de dónde se entró.
+    fun openTaskHistory(id: String, behaviorId: String) {
+        activeTaskId = id
+        activeBehaviorId = behaviorId
+        screen = Screen.PATIENT_TASK_HISTORY
     }
 
     fun saveTask() {

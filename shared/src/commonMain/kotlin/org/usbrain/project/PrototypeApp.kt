@@ -111,7 +111,10 @@ fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit
                 Screen.LOGIN -> LoginScreen(state)
                 Screen.TWO_FACTOR -> TwoFactorScreen(state)
                 Screen.PATIENT_HOME -> PatientHomeScreen(state, dark, onToggleTheme)
+                Screen.PATIENT_BEHAVIORS -> PatientBehaviorsScreen(state)
+                Screen.PATIENT_BEHAVIOR -> PatientBehaviorScreen(state)
                 Screen.PATIENT_TASK -> PatientTaskScreen(state)
+                Screen.PATIENT_TASK_HISTORY -> PatientTaskHistoryScreen(state)
                 Screen.PATIENT_DONE -> PatientDoneScreen(state)
                 Screen.PATIENT_PROGRESS -> PatientProgressScreen(state)
                 Screen.PATIENT_PROFILE -> PatientProfileScreen(state)
@@ -133,7 +136,11 @@ fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit
 private fun showsBottomBar(state: PrototypeState): Boolean {
     if (state.role == null) return false
     return state.screen !in listOf(
-        Screen.LOGIN, Screen.TWO_FACTOR, Screen.PATIENT_TASK, Screen.PATIENT_DONE,
+        Screen.LOGIN, Screen.TWO_FACTOR,
+        // Al entrar a una conducta quedas dentro de ese flujo (Historial → conducta → tarea /
+        // historial de registros): las tabs se ocultan hasta volver con el botón atrás.
+        // PATIENT_BEHAVIORS (la pestaña "Historial" en sí) sí muestra las tabs, por eso no está en esta lista.
+        Screen.PATIENT_BEHAVIOR, Screen.PATIENT_TASK, Screen.PATIENT_TASK_HISTORY, Screen.PATIENT_DONE,
         // Al entrar a un paciente quedas dentro de ese flujo (paciente → conducta →
         // actividad): las tabs se ocultan hasta que vuelves a "Pacientes" con el botón atrás.
         Screen.THERAPIST_PATIENT, Screen.THERAPIST_PATIENT_INFO, Screen.THERAPIST_BEHAVIOR, Screen.THERAPIST_TASK_DETAIL,
@@ -217,6 +224,8 @@ private fun BackHeader(title: String, onBack: () -> Unit) {
  */
 private fun parentTab(screen: Screen): Screen = when (screen) {
     Screen.PATIENT_TASK, Screen.PATIENT_DONE -> Screen.PATIENT_HOME
+    // Conducta y su historial cuelgan de la pestaña "Historial", no de "Inicio".
+    Screen.PATIENT_BEHAVIOR, Screen.PATIENT_TASK_HISTORY -> Screen.PATIENT_BEHAVIORS
     Screen.THERAPIST_PATIENT, Screen.THERAPIST_PATIENT_INFO, Screen.THERAPIST_BEHAVIOR, Screen.THERAPIST_TASK_DETAIL,
     Screen.THERAPIST_NEW_BEHAVIOR, Screen.THERAPIST_NEW_TASK, Screen.THERAPIST_ASSIGNED -> Screen.THERAPIST_HOME
     else -> screen
@@ -782,6 +791,7 @@ private fun PatientHomeScreen(state: PrototypeState, dark: Boolean, onToggleThem
     val caseId = state.caseForPatient(p.id)
     val behaviors = if (caseId != null) state.behaviorsForCase(caseId) else emptyList()
     val done = p.tasks.filter { it.status == TaskStatus.COMPLETADA }
+    val pending = behaviors.flatMap { b -> state.tasksForBehavior(b.id).filter { it.status == TaskStatus.PENDIENTE } }
     ScreenScaffold {
         HomeHeader(
             greeting = "Hola 👋",
@@ -791,16 +801,38 @@ private fun PatientHomeScreen(state: PrototypeState, dark: Boolean, onToggleThem
             onLogout = { state.logout() },
             avatar = { Avatar(p) },
         )
-        val pending = behaviors.flatMap { b -> state.tasksForBehavior(b.id).filter { it.status == TaskStatus.PENDIENTE } }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatTile("${3 + done.size}", "días de racha", MaterialTheme.colorScheme.primary)
+            StatTile("${pending.size}", if (pending.size == 1) "tarea pendiente" else "tareas pendientes", MaterialTheme.colorScheme.onSurface)
+        }
+        // Inicio es solo la bandeja de hoy: qué falta por registrar. El resto —conductas,
+        // historial de registros, gráficas— vive en sus propias pestañas (Historial, Progreso),
+        // no apilado aquí.
+        SectionLabel("Tareas de hoy")
+        if (pending.isEmpty()) {
+            Text(
+                if (behaviors.isEmpty()) "Tu terapeuta aún no ha creado conductas para tu caso." else "Estás al día: no tienes tareas pendientes por ahora.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            pending.forEach { t -> TaskCard(t) { state.openTask(t.id) } }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun PatientBehaviorsScreen(state: PrototypeState) {
+    val p = state.me()
+    val behaviors = state.behaviorsFor(p.id)
+    ScreenScaffold {
+        Text("Historial", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(
-            "Tienes ${pending.size} ${if (pending.size == 1) "tarea" else "tareas"} por registrar.",
+            "Toca una conducta para ver todas sus tareas y el historial de tus registros.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            StatTile("${3 + done.size}", "días de racha", MaterialTheme.colorScheme.primary)
-            StatTile("${done.size}/${behaviors.sumOf { state.tasksForBehavior(it.id).size }}", "registros esta semana", MaterialTheme.colorScheme.onSurface)
-        }
         if (behaviors.isEmpty()) {
             Text(
                 "Tu terapeuta aún no ha creado conductas para tu caso.",
@@ -808,31 +840,74 @@ private fun PatientHomeScreen(state: PrototypeState, dark: Boolean, onToggleThem
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            behaviors.forEach { b ->
-                val behaviorPending = state.tasksForBehavior(b.id).filter { it.status == TaskStatus.PENDIENTE }
-                val behaviorDone = state.tasksForBehavior(b.id).filter { it.status == TaskStatus.COMPLETADA }
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SectionLabel("${b.name}", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Pill(if (b.type == BehaviorType.ADAPTATIVA) "Adaptativa" else "Desadaptativa", MaterialTheme.colorScheme.onSurfaceVariant)
-                        Pill(b.dimension.label, MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (behaviorPending.isNotEmpty()) {
-                        behaviorPending.forEach { t -> TaskCard(t) { state.openTask(t.id) } }
-                    }
-                    if (behaviorDone.isNotEmpty()) {
-                        behaviorDone.forEach { t -> TaskCard(t) }
-                    }
+            behaviors.forEach { b -> BehaviorRow(b) { state.openPatientBehavior(b.id) } }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun PatientBehaviorScreen(state: PrototypeState) {
+    val behavior = state.activeBehavior()
+    ScreenScaffold {
+        BackHeader(behavior.name) { state.screen = Screen.PATIENT_BEHAVIORS }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PhasePill(if (behavior.baselineOpen) Phase.LINEA_BASE else Phase.INTERVENCION)
+            Pill(behavior.type.label, MaterialTheme.colorScheme.onSurfaceVariant)
+            Pill(behavior.dimension.label, MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text(
+            behavior.operationalDefinition,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // Pendientes y ya registradas juntas, pero cada una lleva a la pantalla que le
+        // corresponde: llenar el formulario, o revisar el historial completo de esa tarea
+        // (una tarea recurrente puede tener muchos registros a lo largo del tiempo).
+        SectionLabel("Tareas de esta conducta")
+        if (behavior.tasks.isEmpty()) {
+            Text(
+                "Todavía no hay tareas asignadas para esta conducta.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            behavior.tasks.forEach { t ->
+                if (t.status == TaskStatus.PENDIENTE) {
+                    TaskCard(t) { state.openTask(t.id, behavior.id) }
+                } else {
+                    TaskCard(t, pendingCta = "Ver historial →") { state.openTaskHistory(t.id, behavior.id) }
                 }
             }
         }
-        SectionLabel("Tu progreso")
-        behaviors.forEach { b -> ChartCard(state.progressForBehavior(b)) }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun PatientTaskHistoryScreen(state: PrototypeState) {
+    val task = state.activeTask()
+    ScreenScaffold {
+        BackHeader(task.title) { state.screen = Screen.PATIENT_BEHAVIOR }
+        Text(task.instructions, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val measureLabel = if (task.taskType == TaskType.REGISTRO_AUTONOMO) "${task.dimension.label} (${task.dimension.unit})" else task.metricUnit?.label.orEmpty()
         Text(
-            "Cada tarea que registras agrega un punto a esta gráfica. Tu terapeuta la revisa antes de cada sesión.",
+            "${task.taskType.label} · Medición: $measureLabel",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // Una tarea recurrente acumula varios registros en el tiempo; este es el único lugar
+        // donde el paciente puede revisarlos todos, en vez de solo ver el último al guardarlo.
+        SectionLabel("Historial de registros")
+        if (task.entries.isEmpty()) {
+            Text(
+                "Aún no hay registros para esta tarea.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            task.entries.reversed().forEach { entry -> TaskEntryRow(entry, task) }
+        }
         Spacer(Modifier.height(24.dp))
     }
 }
