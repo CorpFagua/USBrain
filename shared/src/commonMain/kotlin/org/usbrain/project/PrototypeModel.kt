@@ -18,8 +18,8 @@ enum class BehaviorType(val label: String) { ADAPTATIVA("Adaptativa"), DESADAPTA
 enum class TaskStatus { PENDIENTE, COMPLETADA }
 
 // Solo aplica a conductas desadaptativas; NO_APLICA es el valor por defecto sin análisis funcional.
-// Catálogo dinámico (mismo patrón que BehaviorCategory más abajo): el terapeuta puede registrar
-// una función conductual nueva si el catálogo semilla no cubre el caso, sin tocar código.
+// Catálogo dinámico: el terapeuta puede registrar una función conductual nueva si el catálogo
+// semilla no cubre el caso, sin tocar código.
 data class BehavioralFunctionOption(val id: String, val label: String)
 const val NO_APLICA_FUNCTION_ID = "fn-no-aplica"
 
@@ -118,9 +118,6 @@ private fun defaultRoleProfiles(): List<RoleProfile> = listOf(
 
 data class TaskEntry(val date: String, val value: Double, val note: String, val phase: Phase)
 
-// Catálogo global (CATEGORIA_CONDUCTA): la naturaleza no vive aquí, es solo el ejemplo típico del catálogo semilla.
-data class BehaviorCategory(val id: String, val name: String, val domain: String)
-
 data class BehaviorRecord(
     val id: String,
     val taskId: String,
@@ -161,7 +158,6 @@ class Behavior(
     val name: String,
     val operationalDefinition: String,
     val type: BehaviorType,
-    val categoryId: String,
     baselineOpenInitially: Boolean,
     behavioralFunctionId: String = NO_APLICA_FUNCTION_ID,
     replacementBehaviorId: String? = null,
@@ -274,12 +270,8 @@ class PrototypeState {
     var draftBehaviorName by mutableStateOf("")
     var draftDefinition by mutableStateOf("")
     var draftBehaviorType by mutableStateOf(BehaviorType.DESADAPTATIVA)
-    var draftCategoryId by mutableStateOf<String?>(null)
     var draftBehavioralFunctionId by mutableStateOf(NO_APLICA_FUNCTION_ID)
     var draftReplacementBehaviorId by mutableStateOf<String?>(null)
-    var draftNewCategoryName by mutableStateOf("")
-    var draftNewCategoryDomain by mutableStateOf("")
-    var showNewCategoryForm by mutableStateOf(false)
     var draftNewFunctionLabel by mutableStateOf("")
     var showNewFunctionForm by mutableStateOf(false)
     var draftDiagnosisCode by mutableStateOf("")
@@ -301,9 +293,8 @@ class PrototypeState {
 
     private var nextId = 10
     val patients = samplePatients().toMutableStateList()
-    val categories = seedCategories().toMutableStateList()
-    // Mismo espíritu que `categories`: catálogo semilla editable, no un enum cerrado, para poder
-    // registrar una función conductual nueva cuando el análisis funcional del caso lo requiera.
+    // Catálogo semilla editable, no un enum cerrado, para poder registrar una función conductual
+    // nueva cuando el análisis funcional del caso lo requiera.
     val behavioralFunctions = seedBehavioralFunctions().toMutableStateList()
     // Catálogo de apoyo (no exhaustivo) con códigos CIE-10 frecuentes en consulta psicológica;
     // el terapeuta puede asignar cualquier otro código a mano si no está en la lista.
@@ -325,13 +316,6 @@ class PrototypeState {
     fun behaviorsFor(patientId: String): List<Behavior> = patient(patientId).case.behaviorList
     fun tasksFor(patientId: String): List<TrackTask> = behaviorsFor(patientId).flatMap { it.tasks }
     fun adaptiveBehaviorsFor(patientId: String): List<Behavior> = behaviorsFor(patientId).filter { it.type == BehaviorType.ADAPTATIVA }
-
-    fun createCategory(name: String, domain: String): String? {
-        if (name.isBlank()) return null
-        val id = "cat${nextId++}"
-        categories.add(BehaviorCategory(id, name.trim(), domain.trim()))
-        return id
-    }
 
     fun createBehavioralFunction(label: String): String? {
         if (label.isBlank()) return null
@@ -412,12 +396,8 @@ class PrototypeState {
         draftBehaviorName = ""
         draftDefinition = ""
         draftBehaviorType = BehaviorType.DESADAPTATIVA
-        draftCategoryId = null
         draftBehavioralFunctionId = NO_APLICA_FUNCTION_ID
         draftReplacementBehaviorId = null
-        draftNewCategoryName = ""
-        draftNewCategoryDomain = ""
-        showNewCategoryForm = false
         draftNewFunctionLabel = ""
         showNewFunctionForm = false
         behaviorError = null
@@ -425,8 +405,8 @@ class PrototypeState {
     }
 
     fun saveBehavior() {
-        if (draftBehaviorName.isBlank() || draftDefinition.isBlank() || draftCategoryId == null) {
-            behaviorError = "Completa el nombre, la definición operacional y la categoría de la conducta."
+        if (draftBehaviorName.isBlank() || draftDefinition.isBlank()) {
+            behaviorError = "Completa el nombre y la definición operacional de la conducta."
             return
         }
         val patient = patient(draftPatientId)
@@ -435,7 +415,7 @@ class PrototypeState {
         patient.case.behaviorList.add(
             Behavior(
                 id, patient.case.id, draftBehaviorName.trim(), draftDefinition.trim(),
-                draftBehaviorType, draftCategoryId!!, true,
+                draftBehaviorType, true,
                 behavioralFunctionId = if (isMaladaptive) draftBehavioralFunctionId else NO_APLICA_FUNCTION_ID,
                 replacementBehaviorId = if (isMaladaptive) draftReplacementBehaviorId else null,
             )
@@ -522,23 +502,10 @@ class PrototypeState {
     }
 }
 
-// Catálogo semilla sugerido para el perfil de pacientes con TAS; el profesional puede ampliarlo.
-private fun seedCategories(): List<BehaviorCategory> = listOf(
-    BehaviorCategory("cat-autolesion", "Autolesión", "Autorregulación emocional"),
-    BehaviorCategory("cat-agresion", "Agresión física o verbal", "Interacción social"),
-    BehaviorCategory("cat-estereotipia", "Estereotipia motora", "Regulación sensorial"),
-    BehaviorCategory("cat-fuga", "Fuga / elopement", "Seguridad"),
-    BehaviorCategory("cat-rabieta", "Rabieta / desregulación", "Autorregulación emocional"),
-    BehaviorCategory("cat-comunicacion", "Comunicación funcional", "Comunicación"),
-    BehaviorCategory("cat-habilidades-sociales", "Habilidades sociales", "Interacción social"),
-    BehaviorCategory("cat-autocuidado", "Autocuidado (AVD)", "Independencia funcional"),
-    BehaviorCategory("cat-atencion-academica", "Atención y tarea académica", "Desempeño académico"),
-)
-
 private fun samplePatients(): List<Patient> {
     val anxiety = Behavior(
         "b-ana-anxiety", "case-ana", "Episodios de ansiedad en clase",
-        "Episodios observables de ansiedad durante actividades académicas.", BehaviorType.DESADAPTATIVA, "cat-rabieta", false,
+        "Episodios observables de ansiedad durante actividades académicas.", BehaviorType.DESADAPTATIVA, false,
         baselineEntries = listOf(
             BehaviorRecord("r-a1", "t-a-base", "b-ana-anxiety", "Día 1", 5.0, "", Phase.LINEA_BASE, Dimension.FRECUENCIA),
             BehaviorRecord("r-a2", "t-a-base", "b-ana-anxiety", "Día 2", 6.0, "", Phase.LINEA_BASE, Dimension.FRECUENCIA),
@@ -553,7 +520,7 @@ private fun samplePatients(): List<Patient> {
     val participation = Behavior(
         "b-ana-participation", "case-ana", "Participar en clase a pesar de la ansiedad",
         "Intervenciones o participaciones realizadas durante la clase aunque exista ansiedad.",
-        BehaviorType.ADAPTATIVA, "cat-habilidades-sociales", false,
+        BehaviorType.ADAPTATIVA, false,
         baselineEntries = listOf(
             BehaviorRecord("r-p1", "t-p-base", "b-ana-participation", "Día 1", 1.0, "", Phase.LINEA_BASE, Dimension.FRECUENCIA),
             BehaviorRecord("r-p2", "t-p-base", "b-ana-participation", "Día 2", 2.0, "", Phase.LINEA_BASE, Dimension.FRECUENCIA),
@@ -563,7 +530,7 @@ private fun samplePatients(): List<Patient> {
             TrackTask("t3", "b-ana-participation", "Registrar participaciones en clase", "Cada día, cuenta cuántas veces participaste en clase aunque sintieras ansiedad.", TaskType.REGISTRO_AUTONOMO, Dimension.FRECUENCIA, null, "Hoy", true, "Diaria", null, true, Phase.INTERVENCION, TaskStatus.PENDIENTE),
         ),
     )
-    val sleep = Behavior("b-dan-sleep", "case-daniel", "Minutos para conciliar el sueño", "Tiempo entre apagar la luz y quedarse dormido.", BehaviorType.DESADAPTATIVA, "cat-rabieta", true)
+    val sleep = Behavior("b-dan-sleep", "case-daniel", "Minutos para conciliar el sueño", "Tiempo entre apagar la luz y quedarse dormido.", BehaviorType.DESADAPTATIVA, true)
     sleep.tasks.add(TrackTask("d1", sleep.id, "Tiempo que tardaste en dormirte", "Cada mañana estima cuántos minutos pasaron desde que apagaste la luz hasta quedarte dormido.", TaskType.REGISTRO_AUTONOMO, Dimension.DURACION, null, "Hoy", true, "Diaria", null, false, Phase.LINEA_BASE, TaskStatus.PENDIENTE))
     return listOf(
         Patient(
@@ -579,8 +546,8 @@ private fun samplePatients(): List<Patient> {
     )
 }
 
-// Catálogo semilla (mismo espíritu que seedCategories): el terapeuta puede agregar funciones
-// nuevas desde el formulario de conducta cuando el análisis funcional del caso lo requiera.
+// Catálogo semilla: el terapeuta puede agregar funciones nuevas desde el formulario de conducta
+// cuando el análisis funcional del caso lo requiera.
 private fun seedBehavioralFunctions(): List<BehavioralFunctionOption> = listOf(
     BehavioralFunctionOption(NO_APLICA_FUNCTION_ID, "No aplica"),
     BehavioralFunctionOption("fn-atencion", "Atención"),

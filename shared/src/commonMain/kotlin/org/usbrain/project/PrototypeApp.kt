@@ -1788,28 +1788,6 @@ private fun TherapistNewBehaviorScreen(state: PrototypeState) {
                 }
             }
         }
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            DropdownField(
-                label = "Categoría",
-                selectedLabel = state.categories.firstOrNull { it.id == state.draftCategoryId }?.name,
-                placeholder = "Selecciona una categoría",
-                options = state.categories.map { it.id to it.name } + ("__new__" to "+ Crear categoría nueva"),
-                onSelect = { id -> if (id == "__new__") state.showNewCategoryForm = true else { state.draftCategoryId = id; state.showNewCategoryForm = false } },
-            )
-            if (state.showNewCategoryForm) {
-                OutlinedTextField(state.draftNewCategoryName, { state.draftNewCategoryName = it }, Modifier.fillMaxWidth(), placeholder = { Text("Nombre de la categoría") }, singleLine = true)
-                OutlinedTextField(state.draftNewCategoryDomain, { state.draftNewCategoryDomain = it }, Modifier.fillMaxWidth(), placeholder = { Text("Dominio (ej.: Autorregulación emocional)") }, singleLine = true)
-                Button(onClick = {
-                    val id = state.createCategory(state.draftNewCategoryName, state.draftNewCategoryDomain)
-                    if (id != null) {
-                        state.draftCategoryId = id
-                        state.showNewCategoryForm = false
-                        state.draftNewCategoryName = ""
-                        state.draftNewCategoryDomain = ""
-                    }
-                }) { Text("Guardar categoría") }
-            }
-        }
         if (state.draftBehaviorType == BehaviorType.DESADAPTATIVA) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FieldLabel("Función conductual")
