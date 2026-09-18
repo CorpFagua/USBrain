@@ -18,7 +18,7 @@ Está implementado un **prototipo navegable** de los flujos principales, dentro 
 |---|---|
 | **Inicio de sesión (2 roles)** | Un login único → se elige **Paciente** o **Terapeuta** (credenciales autocompletadas) → **verificación 2FA** (código `304 917` precargado) → home del rol |
 | **Home del paciente** | Saludo, racha, registros de la semana, tareas agrupadas por conducta, clasificación de conductas (adaptativas/desadaptativas) y gráficas de progreso |
-| **El paciente llena una tarea** | Se abren las indicaciones del terapeuta → el formulario cambia según la dimensión: **frecuencia** = contador, **intensidad** = escala 0–10, **duración** = minutos → nota opcional → *Guardar registro* → confirmación y el punto nuevo aparece en la gráfica de la conducta |
+| **El paciente llena una tarea** | Se abren las indicaciones del terapeuta → el formulario cambia según la dimensión: **frecuencia** = episodios y minutos observados, **intensidad** = escala 0–10, **duración** = minutos → nota opcional → *Guardar registro* → confirmación y el punto nuevo aparece en la gráfica de la conducta |
 | **Home del terapeuta** | Cartera de pacientes con casos, conductas y tareas pendientes; detalle del caso con conductas, estado de línea base y progreso |
 | **Creación de conducta** | El terapeuta crea una conducta con nombre, definición operacional, clasificación (adaptativa/desadaptativa) y dimensión de medición. La conducta inicia automáticamente con línea base abierta |
 | **Revisión y cierre de línea base** | El terapeuta puede revisar el número de observaciones de línea base de cada conducta y cerrarla cuando corresponda. Al cerrar, los datos quedan fijos como referencia |
@@ -104,6 +104,18 @@ Sciences (2010/2013).
 
 ### Cómo aplica esto en la app
 
+### Ejemplo incluido en la demo
+
+El caso de Ana incluye la conducta **Episodios de ansiedad en clase** con cuatro observaciones
+de línea base y cuatro de intervención. Cada observación guarda los episodios y los minutos
+observados; por eso la gráfica compara la tasa y no el conteo bruto:
+
+- Línea base: 5/45, 6/45, 5/45 y 4/30 = aproximadamente 0,11–0,13 episodios/minuto.
+- Intervención: 3/45, 3/60, 2/45 y 2/60 = aproximadamente 0,03–0,07 episodios/minuto.
+
+Así, dos sesiones con diferente duración siguen siendo comparables y la reducción de la
+conducta se puede leer sin confundir una sesión más larga con un empeoramiento.
+
 - `Dimension` (en [`PrototypeModel.kt`](shared/src/commonMain/kotlin/org/usbrain/project/PrototypeModel.kt))
   ya cubre tres de las dimensiones anteriores — `FRECUENCIA`, `DURACION`, `INTENSIDAD` (como
   escala de magnitud autoinformada 0–10) — quedando `tasa`, `porcentaje de intervalos`, `latencia`
@@ -115,6 +127,9 @@ Sciences (2010/2013).
   `TherapistBehaviorScreen` muestra la evolución de la conducta ahí, con pestañas para alternar
   entre dimensiones cuando hay más de una — así la gráfica es intercambiable según lo que el
   terapeuta esté evaluando, en vez de fijarse a la actividad que se tocó para llegar a ella.
+- En frecuencia, cada registro nuevo puede incluir los minutos observados. Cuando todos los puntos
+  de una serie los incluyen, el eje Y muestra la tasa en episodios/minuto; si una serie histórica
+  tiene registros sin minutos, se conserva como conteo de episodios para no mezclar unidades.
 
 ---
 
@@ -133,6 +148,15 @@ Sciences (2010/2013).
 ---
 
 ## Cómo ejecutar
+
+### Ejemplos incluidos en la demo
+
+La paciente Ana Torres inicia con actividades listas para probar el flujo completo. La actividad
+de **intensidad** registra ansiedad de 1 a 10 (9 → 8 → 6 → 4); **duración** registra minutos
+de crisis (30 → 22 → 12); **cumplimiento** registra la adherencia a respiración (40% → 65% →
+90%); y **Control emocional** es una medición personalizada de 1 a 7 (2 → 4 → 6). También se
+conservan ejemplos de frecuencia de episodios y participación en clase. Cada serie incluye fecha,
+hora, nota opcional y una gráfica temporal desde el detalle de la actividad.
 
 ### Android
 
