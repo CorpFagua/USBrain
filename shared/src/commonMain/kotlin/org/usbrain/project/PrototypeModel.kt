@@ -88,6 +88,10 @@ class PrototypeState {
     var draftDue by mutableStateOf("")
     var draftInstructions by mutableStateOf("")
     var assignError by mutableStateOf<String?>(null)
+    var loginError by mutableStateOf<String?>(null)
+    var isLoggingIn by mutableStateOf(false)
+    private var authenticatedRole by mutableStateOf<Role?>(null)
+    private val authClient = AuthClient()
 
     private var nextId = 1
 
@@ -98,8 +102,38 @@ class PrototypeState {
     fun activePatient(): Patient = patient(activePatientId)
     fun activeTask(): TrackTask = me().tasks.first { it.id == activeTaskId }
 
+    suspend fun login(email: String, password: String) {
+        if (email.isBlank() || password.isBlank()) {
+            loginError = "Ingresa tu correo y contraseña."
+            return
+        }
+        isLoggingIn = true
+        loginError = null
+        try {
+            val response = authClient.login(email, password)
+            authenticatedRole = when (response.role.lowercase()) {
+                "paciente", "patient" -> Role.PATIENT
+                "terapeuta", "therapist" -> Role.THERAPIST
+                else -> throw AuthException(422, "Rol de usuario no reconocido")
+            }
+            loginRole = authenticatedRole ?: loginRole
+            screen = Screen.TWO_FACTOR
+        } catch (error: AuthException) {
+            loginError = when (error.statusCode) {
+                401, 403 -> "Correo o contraseña incorrectos."
+                else -> "No fue posible validar el acceso. Intenta de nuevo."
+            }
+        } catch (error: Exception) {
+            loginError = error.message?.takeIf { it.isNotBlank() }?.let {
+                "No fue posible validar el acceso: $it"
+            } ?: "No hay conexión con el servicio de acceso."
+        } finally {
+            isLoggingIn = false
+        }
+    }
+
     fun verify() {
-        role = loginRole
+        role = authenticatedRole ?: loginRole
         if (loginRole == Role.PATIENT) {
             meId = "ana"; activePatientId = "ana"; screen = Screen.PATIENT_HOME
         } else {
@@ -109,6 +143,8 @@ class PrototypeState {
 
     fun logout() {
         role = null
+        authenticatedRole = null
+        loginError = null
         screen = Screen.LOGIN
     }
 

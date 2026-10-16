@@ -5,6 +5,65 @@ para los servicios de atención psicológica de la Universidad de San Buenaventu
 
 Proyecto Kotlin Multiplatform (Android + iOS) con UI compartida en Compose Multiplatform.
 
+## Login con Oracle APEX
+
+El frontend se autentica contra Oracle por medio de ORDS. Para importar el esquema de login en
+tu instancia APEX y conectar la app, sigue estos pasos:
+
+1. Cambia a la rama `Apexconnection` y descarga/abre el proyecto. Inicia sesión en el workspace
+   APEX que usarás y selecciona un **esquema de parsing vacío**. El instalador es para un esquema
+   nuevo, no para sobrescribir una base existente.
+2. En APEX abre **SQL Workshop > SQL Scripts > Upload**. Selecciona
+   [`docs/oracle-apex-login.sql`](./docs/oracle-apex-login.sql), cárgalo y luego pulsa **Run**.
+   El script crea `USBRAIN_USERS`, `USBRAIN_SESSIONS`, las dos cuentas de prueba y publica el
+   módulo ORDS `usbrain` con `POST /login`. Ejecútalo una sola vez.
+3. Confirma que la ejecución terminó sin errores. En **SQL Workshop > Object Browser** deben
+   aparecer `USBRAIN_USERS` y `USBRAIN_SESSIONS`. La ruta REST publicada por el script es
+   `/ords/usbrain/usbrain/login` (alias del esquema + módulo + plantilla).
+4. Antes de abrir la app, prueba el backend en PowerShell. Sustituye el host por el de tu ORDS;
+   si usas APEX alojado, no uses `localhost`:
+
+   ```powershell
+   $ordsBase = "http://localhost:8080/ords/usbrain/usbrain"
+   $body = @{ email = "ana.torres@usbbog.edu.co"; password = "UsBrain-Demo-2026!" } | ConvertTo-Json
+   Invoke-RestMethod -Uri "$ordsBase/login" -Method Post -ContentType "application/json" -Body $body
+   ```
+
+   La respuesta debe incluir `userId`, `role` con valor `patient` y `token`. Si obtienes `401`,
+   revisa el correo y la contraseña; si obtienes `404`, revisa el alias ORDS y la ruta del módulo.
+5. Configura en el frontend la misma URL base que probaste, **sin** `/login` al final. Cambia el
+   valor de `authBaseUrl()` en `shared/src/androidMain/kotlin/org/usbrain/project/Platform.android.kt`,
+   `shared/src/iosMain/kotlin/org/usbrain/project/Platform.ios.kt` y
+   `shared/src/wasmJsMain/kotlin/org/usbrain/project/HttpClient.wasmJs.kt`. En el emulador Android,
+   `10.0.2.2` representa el computador; en un celular físico usa una dirección accesible desde ese
+   celular. Para navegador configura CORS en ORDS/proxy para el origen del frontend.
+
+   URLs base predeterminadas (sin `/login`):
+
+   | Plataforma | URL |
+   |---|---|
+   | Emulador Android | `http://10.0.2.2:8080/ords/usbrain/usbrain` |
+   | Simulador iOS | `http://localhost:8080/ords/usbrain/usbrain` |
+   | Navegador WASM | `http://localhost:8082/ords/usbrain/usbrain` |
+
+6. Ejecuta el frontend con el backend ORDS activo: en Android, abre el proyecto en Android Studio
+   y pulsa **Run**; en iOS, abre `iosApp` en Xcode; para navegador, ejecuta:
+
+   ```powershell
+   .\gradlew.bat :shared:wasmJsBrowserDevelopmentRun
+   ```
+
+   En WASM, la URL ORDS local configurada por defecto usa el puerto `8082`; el servidor web del
+   frontend usa `8080`. Si tus servicios usan otros puertos, cambia las URL del paso 5.
+
+Las cuentas de demostración son `ana.torres@usbbog.edu.co` y `e.patino@usb.edu.co`, ambas con
+`UsBrain-Demo-2026!`. Cámbialas y usa HTTPS antes de trabajar con datos reales. Los detalles del
+contrato están en [`docs/ords-login-contract.md`](./docs/ords-login-contract.md).
+
+El alcance de base de datos actual es autenticacion: pacientes, tareas y registros del prototipo
+siguen en memoria y no se exportan con este script. El 2FA tambien conserva el codigo de demo y
+no se valida en ORDS.
+
 ---
 
 ## Prototipo interactivo (entrega para el asesor)
@@ -28,7 +87,8 @@ Está implementado un **prototipo navegable** de los flujos principales, dentro 
 
 - Paciente: `ana.torres@usbbog.edu.co` — Ana Torres, ansiedad social, fase intervención.
 - Terapeuta: `e.patino@usb.edu.co` — José E. Patiño.
-- Contraseña: cualquiera (precargada) · Código 2FA: `304 917` (precargado).
+- En el prototipo original la contraseña era cualquiera; el login actual valida contra ORDS.
+- El código 2FA `304 917` sigue siendo de demostración y aún no se valida en el servidor.
 - Segundo paciente de ejemplo: Daniel Ruiz, insomnio de conciliación, fase línea base.
 
 ### Menú (arriba a la derecha)

@@ -7,3 +7,5 @@ class IOSPlatform: Platform {
 }
 
 actual fun getPlatform(): Platform = IOSPlatform()
+
+actual fun authBaseUrl(): String = "http://localhost:8080/ords/usbrain/usbrain"

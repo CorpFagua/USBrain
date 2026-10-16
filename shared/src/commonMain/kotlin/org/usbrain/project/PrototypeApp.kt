@@ -54,6 +54,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,6 +80,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 @Composable
 fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit, onReset: () -> Unit) {
@@ -478,12 +480,13 @@ private fun LegendDot(color: Color, label: String) {
 
 @Composable
 private fun LoginScreen(state: PrototypeState) {
+    val scope = rememberCoroutineScope()
     val email = remember(state.loginRole) {
         mutableStateOf(
-            if (state.loginRole == Role.PATIENT) "ana.torres@usbbog.edu.co" else "e.patino@usb.edu.co",
+            "",
         )
     }
-    val pass = remember(state.loginRole) { mutableStateOf("claveDemo2026") }
+    val pass = remember(state.loginRole) { mutableStateOf("") }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -521,9 +524,21 @@ private fun LoginScreen(state: PrototypeState) {
             label = { Text("Contraseña") }, singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
         )
+        state.loginError?.let { error ->
+            Text(
+                error,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+        }
         Spacer(Modifier.height(18.dp))
-        Button(onClick = { state.screen = Screen.TWO_FACTOR }, Modifier.fillMaxWidth().height(50.dp)) {
-            Text("Iniciar sesión")
+        Button(
+            onClick = { scope.launch { state.login(email.value, pass.value) } },
+            enabled = !state.isLoggingIn,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+        ) {
+            Text(if (state.isLoggingIn) "Validando..." else "Iniciar sesión")
         }
         Spacer(Modifier.height(12.dp))
         Text(
