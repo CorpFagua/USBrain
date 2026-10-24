@@ -5,10 +5,39 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.toMutableStateList
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalTime
+import kotlinx.datetime.minus
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import org.usbrain.project.data.AdminOverviewDto
+import org.usbrain.project.data.ApiException
+import org.usbrain.project.data.Enrollment
+import org.usbrain.project.data.SessionExpiredException
+import org.usbrain.project.data.SessionUser
+import org.usbrain.project.data.TokenResponse
+import org.usbrain.project.data.UsBrainApi
+import org.usbrain.project.security.AppLock
+import org.usbrain.project.security.Biometrics
+import org.usbrain.project.security.supportsAppLock
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 
-fun todayDate(): LocalDate = LocalDate(2026, 9, 16)
+// "Hoy" lo define el servidor (zona horaria de la sede) para que la app y la base coincidan
+// en qué registros son de hoy; mientras no hay datos se usa el reloj del dispositivo.
+private var serverToday: LocalDate? = null
+
+@OptIn(ExperimentalTime::class)
+fun todayDate(): LocalDate =
+    serverToday ?: Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
 
 enum class Role { PATIENT, THERAPIST, ADMIN }
 
@@ -57,7 +86,7 @@ enum class WidgetValueKind(val label: String) {
 
 /**
  * Definición de una variable de medición configurable. Puede venir de un catálogo predefinido
- * (isPreset=true, ver [presetWidgetCatalog]) o ser creada por el terapeuta desde cero
+ * (isPreset=true, catálogo en la tabla usb_widgets) o ser creada por el terapeuta desde cero
  * (isPreset=false), definiendo nombre, tipo de respuesta, rango, unidad y descripción.
  */
 data class WidgetConfig(
@@ -92,20 +121,12 @@ data class WidgetEntry(
     val note: String? = null,
 )
 
-// Catálogo semilla de mediciones listas para usar; el terapeuta puede tomarlas tal cual o crear
-// una personalizada (ver PrototypeState.customWidgets/saveCustomWidget).
-fun presetWidgetCatalog(): List<WidgetConfig> = listOf(
-    WidgetConfig("w-escala", "Escala de ansiedad (1–10)", WidgetValueKind.NUMERIC, unit = "/10", minValue = 1.0, maxValue = 10.0, description = "Intensidad subjetiva de la conducta o emoción en una escala de 1 a 10.", isPreset = true),
-    WidgetConfig("w-frecuencia", "Frecuencia de la conducta", WidgetValueKind.NUMERIC, unit = "episodios", minValue = 0.0, description = "Cuántas veces ocurrió la conducta en el período observado.", isPreset = true),
-    WidgetConfig("w-duracion", "Duración de la conducta", WidgetValueKind.NUMERIC, unit = "minutos", minValue = 0.0, description = "Cuánto duró cada ocurrencia de la conducta, en minutos.", isPreset = true),
-    WidgetConfig("w-cumplimiento", "Cumplimiento de la estrategia", WidgetValueKind.NUMERIC, unit = "%", minValue = 0.0, maxValue = 100.0, description = "Porcentaje de realización de la estrategia terapéutica indicada.", isPreset = true),
-    WidgetConfig("w-si-no", "Ocurrencia (sí/no)", WidgetValueKind.YES_NO, description = "¿Ocurrió la conducta en el período observado?", isPreset = true),
-    WidgetConfig("w-seleccion", "Síntomas o emociones presentes", WidgetValueKind.MULTI_SELECT, options = listOf("Ansiedad", "Tristeza", "Irritabilidad", "Evitación", "Insomnio", "Otro"), description = "Selecciona todos los síntomas o emociones presentes.", isPreset = true),
-    WidgetConfig("w-texto", "Observación cualitativa", WidgetValueKind.TEXT, description = "Campo abierto para observaciones del consultante.", isPreset = true),
-)
-
 enum class Screen {
-    LOGIN, TWO_FACTOR,
+    // SPLASH: restaurando la sesión guardada al abrir la app. RECOVERY_CODES: se muestran
+    // una sola vez, justo después de enrolar el autenticador.
+    SPLASH, LOGIN, TWO_FACTOR, RECOVERY_CODES, FORGOT_PASSWORD,
+    // Bloqueo estilo banco: crear el PIN, ofrecer biometría y la pantalla de desbloqueo.
+    PIN_SETUP, BIOMETRIC_OFFER, LOCK,
     // PATIENT_HOME es solo "tareas de hoy". PATIENT_BEHAVIORS es la pestaña "Historial": lista
     // las conductas del caso; tocar una lleva a PATIENT_BEHAVIOR (todas sus tareas), y de ahí a
     // PATIENT_TASK_HISTORY (todos los registros de esa tarea — puede tener varios). Nada de eso
@@ -118,7 +139,7 @@ enum class Screen {
     // pantalla se mantenga enfocada solo en las conductas del caso.
     THERAPIST_HOME, THERAPIST_PATIENT, THERAPIST_PATIENT_INFO, THERAPIST_BEHAVIOR, THERAPIST_TASK_DETAIL,
     THERAPIST_NEW_BEHAVIOR, THERAPIST_BASELINE_SETUP, THERAPIST_NEW_TASK, THERAPIST_NEW_WIDGET, THERAPIST_ASSIGNED, THERAPIST_PROFILE,
-    ADMIN_HOME,
+    ADMIN_HOME, ADMIN_USERS, ADMIN_USER_EDIT, ADMIN_ROLES, ADMIN_ROLE_EDIT, ADMIN_PROFILE,
 }
 
 /** Pestañas dentro del detalle de una conducta: separan "gestionar actividades" de "ver la
@@ -126,7 +147,7 @@ enum class Screen {
 enum class BehaviorTab { ACTIVIDADES, ANALISIS }
 
 /** Un ítem de la barra de navegación inferior de un perfil. */
-data class NavTab(val screen: Screen, val label: String, val glyph: String)
+data class NavTab(val screen: Screen, val label: String, val glyph: String, val permission: String? = null)
 
 /**
  * Perfil de acceso: define qué pantalla de inicio y qué tabs ve un rol al iniciar sesión.
@@ -178,6 +199,10 @@ private fun defaultRoleProfiles(): List<RoleProfile> = listOf(
         homeScreen = Screen.ADMIN_HOME,
         tabs = listOf(
             NavTab(Screen.ADMIN_HOME, "Panel", "home"),
+            // Cada pestaña aparece solo si el rol tiene el permiso (roles dinámicos).
+            NavTab(Screen.ADMIN_USERS, "Usuarios", "users", permission = "users.view"),
+            NavTab(Screen.ADMIN_ROLES, "Roles", "shield", permission = "roles.manage"),
+            NavTab(Screen.ADMIN_PROFILE, "Perfil", "person"),
         ),
     ),
 )
@@ -336,6 +361,7 @@ class Patient(
     val condition: String,
     val case: SingleCase,
     diagnoses: List<Cie10Diagnosis> = emptyList(),
+    val therapistName: String = "",
 ) {
     val diagnoses = diagnoses.toMutableStateList()
     val behaviors: List<Behavior> get() = case.behaviorList
@@ -352,18 +378,96 @@ class Patient(
 
 val FRECUENCIAS = listOf("Diaria", "N veces por semana", "Semanal", "Personalizada")
 
-/** Estado en memoria del prototipo. Se recrea al "Reiniciar demo". */
-class PrototypeState {
-    var screen by mutableStateOf(Screen.LOGIN)
+/**
+ * Estado de la app. Los datos vienen de la API (bootstrap) y cada acción de las pantallas
+ * llama al servidor y luego recarga el bootstrap, así la vista siempre refleja la base.
+ * Las pantallas siguen leyendo las mismas propiedades que en el prototipo.
+ */
+class PrototypeState(
+    private val api: UsBrainApi,
+    private val scope: CoroutineScope,
+) {
+    var screen by mutableStateOf(Screen.SPLASH)
     var role by mutableStateOf<Role?>(null)
-    var loginRole by mutableStateOf(Role.PATIENT)
-    var meId by mutableStateOf("ana")
-    var activePatientId by mutableStateOf("ana")
+    var meId by mutableStateOf("")
+    var activePatientId by mutableStateOf("")
     var activeTaskId by mutableStateOf<String?>(null)
     var activeBehaviorId by mutableStateOf<String?>(null)
     // Pestaña activa del detalle de conducta; vive en el estado (no local a la pantalla) para
     // que el FAB de "nueva actividad" en el Scaffold superior sepa si debe mostrarse.
     var behaviorDetailTab by mutableStateOf(BehaviorTab.ACTIVIDADES)
+
+    // --- Sesión y autenticación ---
+    var sessionUser by mutableStateOf<SessionUser?>(null)
+    var loginEmail by mutableStateOf("")
+    var loginPassword by mutableStateOf("")
+    var authError by mutableStateOf<String?>(null)
+    var challengeId by mutableStateOf<String?>(null)
+    var enrollment by mutableStateOf<Enrollment?>(null)
+    var mfaCode by mutableStateOf("")
+    var useRecoveryCode by mutableStateOf(false)
+    var recoveryCodes by mutableStateOf<List<String>>(emptyList())
+    // Vista previa del terapeuta como paciente: solo lectura, con regreso a su rol.
+    var previewing by mutableStateOf(false)
+
+    // Operación en curso (deshabilita envíos dobles y muestra la barra de progreso).
+    var busy by mutableStateOf(false)
+    // Error general de una acción que no tiene un campo de error propio en su pantalla.
+    var banner by mutableStateOf<String?>(null)
+    var connectionError by mutableStateOf<String?>(null)
+    // Mensaje de éxito en la pantalla de login (p. ej. "contraseña actualizada").
+    var authInfo by mutableStateOf<String?>(null)
+
+    // --- Permisos (roles dinámicos): la interfaz muestra acciones según permisos, no según el rol ---
+    var permissions by mutableStateOf<Set<String>>(emptySet())
+    fun can(permission: String) = permission in permissions
+    val canEditCases: Boolean get() = can("case.edit.assigned") || can("case.edit.all")
+
+    // --- Olvido de contraseña ---
+    var forgotEmail by mutableStateOf("")
+    var forgotResetId by mutableStateOf<String?>(null)
+    var forgotInfo by mutableStateOf<String?>(null)
+    var forgotCode by mutableStateOf("")
+    var forgotUseRecovery by mutableStateOf(false)
+    var forgotNewPassword by mutableStateOf("")
+    var forgotConfirmPassword by mutableStateOf("")
+
+    // --- PIN y biometría (bloqueo de la app) ---
+    enum class PinStep { CURRENT, NEW, CONFIRM }
+    var pinInput by mutableStateOf("")
+    var pinStep by mutableStateOf(PinStep.NEW)
+    var pinError by mutableStateOf<String?>(null)
+    var pinChanging by mutableStateOf(false)
+    var biometricEnabled by mutableStateOf(AppLock.biometricEnabled)
+    val biometricAvailable: Boolean get() = Biometrics.isAvailable()
+    private var pinFirst = ""
+    private var pinReturnScreen: Screen? = null
+    private var pendingUser: SessionUser? = null
+    private var lockReturnScreen: Screen? = null
+    private var lockNeedsRestore = false
+    private var backgroundSince: Long? = null
+
+    // --- Administración ---
+    var adminData by mutableStateOf<AdminOverviewDto?>(null)
+    var adminError by mutableStateOf<String?>(null)
+    var adminInfo by mutableStateOf<String?>(null)
+    var editingUserId by mutableStateOf<String?>(null)
+    var draftUserEmail by mutableStateOf("")
+    var draftUserName by mutableStateOf("")
+    var draftUserRole by mutableStateOf("")
+    var draftUserStatus by mutableStateOf("ACTIVE")
+    var draftUserPassword by mutableStateOf("")
+    var draftUserTherapistId by mutableStateOf<String?>(null)
+    var draftUserBirthDate by mutableStateOf("")
+    var draftUserProgram by mutableStateOf("")
+    var draftUserCondition by mutableStateOf("")
+    var draftActionPassword by mutableStateOf("")
+    var editingRoleId by mutableStateOf<String?>(null)
+    var draftRoleId by mutableStateOf("")
+    var draftRoleName by mutableStateOf("")
+    var draftRoleDescription by mutableStateOf("")
+    var draftRoleProfile by mutableStateOf("THERAPIST")
+    val draftRolePermissions = mutableStateListOf<String>()
 
     var taskInputValue by mutableStateOf(0.0)
     var taskObservationMinutes by mutableStateOf(0)
@@ -372,7 +476,7 @@ class PrototypeState {
     var taskEntryTime by mutableStateOf(LocalTime(9, 0))
     var taskError by mutableStateOf<String?>(null)
 
-    var draftPatientId by mutableStateOf("ana")
+    var draftPatientId by mutableStateOf("")
     var draftBehaviorId by mutableStateOf<String?>(null)
     var draftBehaviorName by mutableStateOf("")
     var draftDefinition by mutableStateOf("")
@@ -384,6 +488,7 @@ class PrototypeState {
     var draftDiagnosisCode by mutableStateOf("")
     var draftDiagnosisLabel by mutableStateOf("")
     var showNewDiagnosisForm by mutableStateOf(false)
+    var diagnosisError by mutableStateOf<String?>(null)
     var draftTaskTitle by mutableStateOf("")
     var draftTaskType by mutableStateOf(TaskType.REGISTRO_AUTONOMO)
     var draftTaskDimension by mutableStateOf(Dimension.FRECUENCIA)
@@ -398,6 +503,8 @@ class PrototypeState {
     var draftInstructions by mutableStateOf("")
     var assignError by mutableStateOf<String?>(null)
     var behaviorError by mutableStateOf<String?>(null)
+    var lastAssignedTaskId by mutableStateOf<String?>(null)
+    var lastSavedEntryDate by mutableStateOf<LocalDate?>(null)
 
     // --- Sistema de widgets de medición configurables (nuevo, en paralelo a Dimension/MetricUnit) ---
     var draftUseWidgetSystem by mutableStateOf(true)
@@ -421,25 +528,26 @@ class PrototypeState {
     var draftWidgetTextValue by mutableStateOf("")
     val draftWidgetSelectedOptions = mutableStateListOf<String>()
 
-    private var nextId = 10
-    val patients = samplePatients().toMutableStateList()
-    // Mediciones personalizadas creadas por el terapeuta; se suman al catálogo predefinido para
-    // poder reutilizarse en cualquier actividad/consultante posterior.
-    val customWidgets = mutableStateListOf<WidgetConfig>()
-    fun widgetCatalog(): List<WidgetConfig> = presetWidgetCatalog() + customWidgets
-    fun widget(id: String): WidgetConfig? = widgetCatalog().firstOrNull { it.id == id }
-    // Catálogo semilla editable, no un enum cerrado, para poder registrar una función conductual
-    // nueva cuando el análisis funcional del caso lo requiera.
-    val behavioralFunctions = seedBehavioralFunctions().toMutableStateList()
-    // Catálogo de apoyo (no exhaustivo) con códigos CIE-10 frecuentes en consulta psicológica;
-    // el terapeuta puede asignar cualquier otro código a mano si no está en la lista.
-    val cie10Catalog = seedCie10().toMutableStateList()
+    // --- Datos del servidor ---
+    val patients = mutableStateListOf<Patient>()
+    // Catálogo de mediciones: predefinidas + personalizadas creadas por los terapeutas.
+    val widgets = mutableStateListOf<WidgetConfig>()
+    fun widgetCatalog(): List<WidgetConfig> = widgets
+    fun widget(id: String): WidgetConfig? = widgets.firstOrNull { it.id == id }
+    // Catálogo editable de funciones conductuales (no un enum cerrado).
+    val behavioralFunctions = mutableStateListOf<BehavioralFunctionOption>()
+    // Catálogo de apoyo con códigos CIE-10 frecuentes; se puede asignar cualquier otro a mano.
+    val cie10Catalog = mutableStateListOf<Cie10Diagnosis>()
 
     // Mutable a propósito: es el catálogo de roles/permisos del sistema, pensado para poder
     // registrar perfiles nuevos más adelante sin cambiar la navegación (ver [RoleProfile]).
     val roleProfiles = defaultRoleProfiles().toMutableStateList()
     fun roleProfile(role: Role): RoleProfile? = roleProfiles.firstOrNull { it.role == role }
     val currentProfile: RoleProfile? get() = role?.let { roleProfile(it) }
+
+    val userName: String get() = sessionUser?.fullName.orEmpty()
+    val userInitials: String
+        get() = userName.split(' ').filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }
 
     fun patient(id: String): Patient = patients.first { it.id == id }
     fun me(): Patient = patient(meId)
@@ -451,47 +559,607 @@ class PrototypeState {
     fun behaviorsFor(patientId: String): List<Behavior> = patient(patientId).case.behaviorList
     fun tasksFor(patientId: String): List<TrackTask> = behaviorsFor(patientId).flatMap { it.tasks }
     fun adaptiveBehaviorsFor(patientId: String): List<Behavior> = behaviorsFor(patientId).filter { it.type == BehaviorType.ADAPTATIVA }
-
-    fun createBehavioralFunction(label: String): String? {
-        if (label.isBlank()) return null
-        val id = "fn${nextId++}"
-        behavioralFunctions.add(BehavioralFunctionOption(id, label.trim()))
-        return id
-    }
-
-    // Asignar, no reemplazar: un paciente puede tener más de un código CIE-10 (comorbilidad).
-    // Si el código ya estaba asignado no se duplica.
-    fun assignDiagnosis(patientId: String, code: String, label: String): Boolean {
-        val trimmedCode = code.trim().uppercase()
-        if (trimmedCode.isBlank()) return false
-        val p = patient(patientId)
-        if (p.diagnoses.none { it.code == trimmedCode }) {
-            p.diagnoses.add(Cie10Diagnosis(trimmedCode, label.trim().ifBlank { trimmedCode }))
+    // Días seguidos con al menos un registro, contando hacia atrás desde hoy (o desde ayer si
+    // hoy todavía no ha registrado nada, para no "romper" la racha a primera hora del día).
+    fun streakDays(patient: Patient): Int {
+        val days = patient.tasks.flatMap { task -> task.entries.map { it.date } + task.widgetEntries.map { it.date } }.toSet()
+        var day = todayDate()
+        if (day !in days) day = day.minus(1, DateTimeUnit.DAY)
+        var streak = 0
+        while (day in days) {
+            streak++
+            day = day.minus(1, DateTimeUnit.DAY)
         }
-        return true
+        return streak
     }
 
-    fun removeDiagnosis(patientId: String, code: String) {
-        patient(patientId).diagnoses.removeAll { it.code == code }
-    }
-    
+    fun lastAssignedTask(): TrackTask? = lastAssignedTaskId?.let { id -> patients.flatMap { it.tasks }.firstOrNull { it.id == id } }
+
     // Funciones helper para las pantallas del paciente
     fun caseForPatient(patientId: String): String? = patient(patientId).case.id
     fun behaviorsForCase(caseId: String): List<Behavior> = patients.asSequence().flatMap { it.case.behaviorList.asSequence() }.filter { it.caseId == caseId }.toList()
     fun tasksForBehavior(behaviorId: String): List<TrackTask> = behavior(behaviorId).tasks.toList()
-    fun recordsForBehavior(behaviorId: String): List<BehaviorRecord> {
-        val b = behavior(behaviorId)
-        return b.records
-    }
+    fun recordsForBehavior(behaviorId: String): List<BehaviorRecord> = behavior(behaviorId).records
     fun progressForBehavior(behavior: Behavior): Behavior = behavior
 
-    fun verify() {
-        role = loginRole
-        if (loginRole == Role.PATIENT) { meId = "ana"; activePatientId = "ana" }
-        screen = roleProfile(loginRole)?.homeScreen ?: Screen.LOGIN
+    // ------------------------------------------------------------------ red
+
+    /**
+     * Ejecuta una acción contra la API: evita envíos dobles, y traduce los errores al
+     * campo de la pantalla ([onError]) o, si la sesión terminó, devuelve al login.
+     */
+    private fun launch(onError: (String) -> Unit = { banner = it }, block: suspend () -> Unit) {
+        if (busy) return
+        busy = true
+        banner = null
+        scope.launch {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SessionExpiredException) {
+                endSession(e.message)
+            } catch (e: ApiException) {
+                onError(e.message)
+            } catch (e: Exception) {
+                onError("No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo.")
+            } finally {
+                busy = false
+            }
+        }
     }
 
-    fun logout() { role = null; screen = Screen.LOGIN }
+    /** Vuelve a pedir todos los datos del usuario y reemplaza los de la vista. */
+    private suspend fun reload() {
+        val data = api.bootstrap()
+        serverToday = runCatching { LocalDate.parse(data.today) }.getOrNull()
+        // Si el super admin cambió los permisos del rol, la interfaz se ajusta en la siguiente recarga.
+        permissions = data.user.permissions.toSet()
+        val widgetConfigs = data.catalogs.widgets.map { it.toWidgetConfig() }
+        widgets.clear(); widgets.addAll(widgetConfigs)
+        behavioralFunctions.clear()
+        behavioralFunctions.addAll(data.catalogs.functions.map { BehavioralFunctionOption(it.id, it.label) })
+        cie10Catalog.clear(); cie10Catalog.addAll(data.catalogs.cie10.map { Cie10Diagnosis(it.code, it.label) })
+        patients.clear(); patients.addAll(data.toPatients(widgetConfigs))
+    }
+
+    // ------------------------------------------------------------------ sesión
+
+    /** Al abrir la app: si hay sesión guardada se entra directo, como en la app de un banco. */
+    fun start() {
+        if (!api.hasStoredSession) {
+            screen = Screen.LOGIN
+            return
+        }
+        // Como en la app de un banco: la sesión guardada solo se usa después del PIN o la huella.
+        if (supportsAppLock && AppLock.isConfigured) {
+            lockNeedsRestore = true
+            lockReturnScreen = null
+            openLock()
+            return
+        }
+        restoreSession()
+    }
+
+    private fun restoreSession() {
+        screen = Screen.SPLASH
+        connectionError = null
+        scope.launch {
+            try {
+                val user = api.restoreSession()
+                if (user == null) {
+                    screen = Screen.LOGIN
+                } else {
+                    proceedAfterAuth(user)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Sin red no se borra la sesión: se ofrece reintentar.
+                connectionError = "No se pudo conectar con el servidor. Revisa tu conexión."
+            }
+        }
+    }
+
+    fun submitLogin() {
+        authError = null
+        if (loginEmail.isBlank() || loginPassword.isBlank()) {
+            authError = "Ingresa tu correo y tu contraseña."
+            return
+        }
+        launch({ authError = it }) {
+            val response = api.login(loginEmail, loginPassword)
+            challengeId = response.challengeId
+            enrollment = response.enrollment
+            mfaCode = ""
+            useRecoveryCode = false
+            loginPassword = ""
+            screen = Screen.TWO_FACTOR
+        }
+    }
+
+    fun submitMfa() {
+        val challenge = challengeId ?: return
+        authError = null
+        val code = mfaCode.filter { !it.isWhitespace() }
+        if (useRecoveryCode && code.length < 10 || !useRecoveryCode && code.length != 6) {
+            authError = if (useRecoveryCode) "Escribe el código de recuperación completo." else "El código tiene 6 dígitos."
+            return
+        }
+        launch({ message ->
+            authError = message
+            mfaCode = ""
+        }) {
+            val tokens: TokenResponse = try {
+                if (useRecoveryCode) api.verifyRecoveryCode(challenge, code) else api.verifyMfa(challenge, code)
+            } catch (e: ApiException) {
+                if (e.code == "challenge_expired") cancelLogin(e.message)
+                throw e
+            }
+            challengeId = null
+            enrollment = null
+            mfaCode = ""
+            if (tokens.recoveryCodes.isNotEmpty()) {
+                // Recién enroló: primero se muestran los códigos de recuperación, una sola vez.
+                recoveryCodes = tokens.recoveryCodes
+                sessionUser = tokens.user
+                screen = Screen.RECOVERY_CODES
+            } else {
+                proceedAfterAuth(tokens.user)
+            }
+        }
+    }
+
+    fun confirmRecoveryCodesSaved() {
+        val user = sessionUser ?: return
+        recoveryCodes = emptyList()
+        launch { proceedAfterAuth(user) }
+    }
+
+    fun cancelLogin(message: String? = null) {
+        challengeId = null
+        enrollment = null
+        mfaCode = ""
+        authError = message
+        screen = Screen.LOGIN
+    }
+
+    private suspend fun enterApp(user: SessionUser) {
+        sessionUser = user
+        reload()
+        permissions = user.permissions.toSet()
+        // La interfaz la decide el perfil del rol (un rol nuevo como "Supervisor" usa la de terapeuta).
+        val userRole = Role.entries.firstOrNull { it.name == user.profile } ?: Role.PATIENT
+        role = userRole
+        previewing = false
+        if (userRole == Role.PATIENT) {
+            meId = user.id.toString()
+            activePatientId = meId
+        } else {
+            activePatientId = patients.firstOrNull()?.id.orEmpty()
+        }
+        screen = roleProfile(userRole)?.homeScreen ?: Screen.LOGIN
+    }
+
+    fun logout(message: String? = null) {
+        scope.launch {
+            api.logout()
+            endSession(message)
+        }
+    }
+
+    private fun endSession(message: String?) {
+        api.clearSession()
+        role = null
+        sessionUser = null
+        pendingUser = null
+        permissions = emptySet()
+        previewing = false
+        patients.clear()
+        adminData = null
+        lockNeedsRestore = false
+        lockReturnScreen = null
+        authError = message
+        screen = Screen.LOGIN
+    }
+
+    /** Después de contraseña + 2FA (o de restaurar la sesión): crear el PIN si falta, y entrar. */
+    private suspend fun proceedAfterAuth(user: SessionUser) {
+        sessionUser = user
+        permissions = user.permissions.toSet()
+        if (supportsAppLock && !AppLock.hasPinFor(user.id)) {
+            pendingUser = user
+            startPinSetup(changing = false)
+        } else {
+            enterApp(user)
+        }
+    }
+
+    // ------------------------------------------------------------------ olvido de contraseña
+
+    fun openForgotPassword() {
+        forgotEmail = loginEmail
+        forgotResetId = null
+        forgotInfo = null
+        forgotCode = ""
+        forgotUseRecovery = false
+        forgotNewPassword = ""
+        forgotConfirmPassword = ""
+        authError = null
+        authInfo = null
+        screen = Screen.FORGOT_PASSWORD
+    }
+
+    fun submitForgotEmail() {
+        authError = null
+        if (forgotEmail.isBlank()) {
+            authError = "Escribe tu correo institucional."
+            return
+        }
+        launch({ authError = it }) {
+            val response = api.forgotPassword(forgotEmail)
+            forgotResetId = response.resetId
+            forgotInfo = response.message
+        }
+    }
+
+    fun submitResetPassword() {
+        val resetId = forgotResetId ?: return
+        authError = null
+        val code = forgotCode.filter { !it.isWhitespace() }
+        when {
+            forgotUseRecovery && code.length < 10 -> authError = "Escribe el código de recuperación completo."
+            !forgotUseRecovery && code.length != 6 -> authError = "El código tiene 6 dígitos."
+            forgotNewPassword.length < 10 -> authError = "La contraseña debe tener al menos 10 caracteres."
+            forgotNewPassword != forgotConfirmPassword -> authError = "Las contraseñas no coinciden."
+            else -> launch({ message -> authError = message; forgotCode = "" }) {
+                try {
+                    api.resetPassword(
+                        resetId,
+                        code.takeIf { !forgotUseRecovery },
+                        code.takeIf { forgotUseRecovery },
+                        forgotNewPassword,
+                    )
+                } catch (e: ApiException) {
+                    if (e.code == "challenge_expired") forgotResetId = null
+                    throw e
+                }
+                loginEmail = forgotEmail
+                loginPassword = ""
+                forgotNewPassword = ""
+                forgotConfirmPassword = ""
+                authInfo = "Contraseña actualizada. Inicia sesión con la nueva."
+                screen = Screen.LOGIN
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ PIN y biometría
+
+    fun startPinSetup(changing: Boolean) {
+        pinChanging = changing
+        pinStep = if (changing) PinStep.CURRENT else PinStep.NEW
+        pinReturnScreen = if (changing) screen else null
+        pinInput = ""
+        pinFirst = ""
+        pinError = null
+        screen = Screen.PIN_SETUP
+    }
+
+    fun pinDigit(digit: Char) {
+        if (pinInput.length >= AppLock.PIN_LENGTH) return
+        pinInput += digit
+        if (pinInput.length == AppLock.PIN_LENGTH) {
+            if (screen == Screen.LOCK) submitUnlock() else advancePinSetup()
+        }
+    }
+
+    fun pinBackspace() {
+        pinInput = pinInput.dropLast(1)
+    }
+
+    private fun advancePinSetup() {
+        val pin = pinInput
+        pinInput = ""
+        pinError = null
+        when (pinStep) {
+            PinStep.CURRENT ->
+                if (AppLock.verify(pin)) {
+                    pinStep = PinStep.NEW
+                } else if (AppLock.remainingAttempts == 0) {
+                    lockedOut()
+                } else {
+                    pinError = "PIN incorrecto. Te quedan ${AppLock.remainingAttempts} intentos."
+                }
+            PinStep.NEW ->
+                if (AppLock.isWeak(pin)) {
+                    pinError = "Elige un PIN menos obvio: sin dígitos repetidos ni secuencias."
+                } else {
+                    pinFirst = pin
+                    pinStep = PinStep.CONFIRM
+                }
+            PinStep.CONFIRM ->
+                if (pin != pinFirst) {
+                    pinError = "Los PIN no coinciden. Escríbelo de nuevo."
+                    pinStep = PinStep.NEW
+                } else {
+                    val user = pendingUser ?: sessionUser ?: return
+                    AppLock.setPin(user.id, pin)
+                    if (pinChanging) {
+                        banner = null
+                        adminInfo = null
+                        screen = pinReturnScreen ?: currentProfile?.homeScreen ?: Screen.LOGIN
+                    } else if (Biometrics.isAvailable()) {
+                        screen = Screen.BIOMETRIC_OFFER
+                    } else {
+                        finishOnboarding()
+                    }
+                }
+        }
+    }
+
+    private fun finishOnboarding() {
+        val user = pendingUser ?: return
+        pendingUser = null
+        launch { enterApp(user) }
+    }
+
+    /** Activa la huella o el rostro tras confirmarlos una vez (desde la bienvenida o el perfil). */
+    fun enableBiometric(fromOnboarding: Boolean) {
+        scope.launch {
+            val ok = Biometrics.authenticate("Activar huella o rostro", "Confírmalo para usarlo al abrir USBrain")
+            if (ok) {
+                AppLock.biometricEnabled = true
+                biometricEnabled = true
+            }
+            if (fromOnboarding) finishOnboarding()
+        }
+    }
+
+    fun skipBiometric() = finishOnboarding()
+
+    fun disableBiometric() {
+        AppLock.biometricEnabled = false
+        biometricEnabled = false
+    }
+
+    private fun openLock() {
+        pinInput = ""
+        pinError = null
+        screen = Screen.LOCK
+    }
+
+    private fun submitUnlock() {
+        if (AppLock.verify(pinInput)) {
+            unlocked()
+            return
+        }
+        pinInput = ""
+        val left = AppLock.remainingAttempts
+        if (left == 0) lockedOut() else pinError = "PIN incorrecto. Te quedan $left intentos."
+    }
+
+    fun unlockWithBiometric() {
+        if (!AppLock.biometricEnabled || !Biometrics.isAvailable()) return
+        scope.launch {
+            if (Biometrics.authenticate("Desbloquear USBrain", "Usa tu huella o tu rostro")) {
+                AppLock.resetFailures()
+                unlocked()
+            }
+        }
+    }
+
+    private fun unlocked() {
+        pinInput = ""
+        pinError = null
+        if (lockNeedsRestore) {
+            lockNeedsRestore = false
+            restoreSession()
+        } else {
+            screen = lockReturnScreen ?: currentProfile?.homeScreen ?: Screen.LOGIN
+        }
+        lockReturnScreen = null
+    }
+
+    // Demasiados intentos: se borran PIN y sesión; hay que entrar con contraseña y 2FA.
+    private fun lockedOut() {
+        AppLock.clear()
+        biometricEnabled = false
+        logout("Demasiados intentos con el PIN. Inicia sesión de nuevo.")
+    }
+
+    fun forgotPin() {
+        AppLock.clear()
+        biometricEnabled = false
+        logout("Inicia sesión con tu contraseña y crea un PIN nuevo.")
+    }
+
+    /** La app pasó a segundo plano (la llama App.kt con el ciclo de vida). */
+    fun onBackground() {
+        if (role != null) backgroundSince = nowMillis()
+    }
+
+    /** Volvió a primer plano: tras [AppLock.LOCK_AFTER_SECONDS] se pide el PIN otra vez. */
+    fun onForeground() {
+        val since = backgroundSince ?: return
+        backgroundSince = null
+        if (!supportsAppLock || role == null || !AppLock.isConfigured) return
+        if (screen == Screen.LOCK || screen == Screen.PIN_SETUP || screen == Screen.BIOMETRIC_OFFER) return
+        if (nowMillis() - since >= AppLock.LOCK_AFTER_SECONDS * 1000) {
+            lockReturnScreen = screen
+            lockNeedsRestore = false
+            openLock()
+        }
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private fun nowMillis(): Long = Clock.System.now().toEpochMilliseconds()
+
+    // ------------------------------------------------------------------ administración
+
+    /** Carga usuarios, roles, permisos y bitácora. Las pantallas de administración la llaman al abrirse. */
+    fun loadAdmin() {
+        adminError = null
+        scope.launch {
+            try {
+                adminData = api.adminOverview()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SessionExpiredException) {
+                endSession(e.message)
+            } catch (e: ApiException) {
+                adminError = e.message
+            } catch (e: Exception) {
+                adminError = "No se pudo conectar con el servidor."
+            }
+        }
+    }
+
+    fun startNewUser() {
+        editingUserId = null
+        draftUserEmail = ""
+        draftUserName = ""
+        draftUserRole = adminData?.roles?.firstOrNull { it.id == "PATIENT" }?.id ?: ""
+        draftUserStatus = "ACTIVE"
+        draftUserPassword = ""
+        draftUserTherapistId = adminData?.therapists?.firstOrNull()?.id
+        draftUserBirthDate = ""
+        draftUserProgram = ""
+        draftUserCondition = ""
+        draftActionPassword = ""
+        adminError = null
+        adminInfo = null
+        screen = Screen.ADMIN_USER_EDIT
+    }
+
+    fun openUser(id: String) {
+        val user = adminData?.users?.firstOrNull { it.id == id } ?: return
+        editingUserId = id
+        draftUserEmail = user.email
+        draftUserName = user.fullName
+        draftUserRole = user.role
+        draftUserStatus = user.status
+        draftUserTherapistId = user.therapistId
+        draftUserPassword = ""
+        draftActionPassword = ""
+        adminError = null
+        adminInfo = null
+        screen = Screen.ADMIN_USER_EDIT
+    }
+
+    fun draftRoleProfileOf(roleId: String): String? = adminData?.roles?.firstOrNull { it.id == roleId }?.profile
+
+    fun saveUser() {
+        adminError = null
+        val editing = editingUserId
+        val isPatientRole = draftRoleProfileOf(draftUserRole) == "PATIENT"
+        launch({ adminError = it }) {
+            if (editing == null) {
+                api.adminCreateUser(buildJsonObject {
+                    put("email", draftUserEmail.trim())
+                    put("full_name", draftUserName.trim())
+                    put("role", draftUserRole)
+                    put("password", draftUserPassword)
+                    if (isPatientRole) {
+                        draftUserTherapistId?.let { put("therapist_id", it) }
+                        put("birth_date", draftUserBirthDate.trim())
+                        put("program", draftUserProgram.trim())
+                        put("condition", draftUserCondition.trim())
+                    }
+                })
+                adminInfo = "Usuario creado. Comparte la contraseña inicial por un canal seguro."
+            } else {
+                api.adminUpdateUser(editing, buildJsonObject {
+                    put("full_name", draftUserName.trim())
+                    put("role", draftUserRole)
+                    put("status", draftUserStatus)
+                    if (isPatientRole) draftUserTherapistId?.let { put("therapist_id", it) }
+                })
+                adminInfo = "Cambios guardados."
+            }
+            adminData = api.adminOverview()
+            screen = Screen.ADMIN_USERS
+        }
+    }
+
+    /** unlock | reset_mfa | set_password */
+    fun userAction(action: String) {
+        val id = editingUserId ?: return
+        adminError = null
+        adminInfo = null
+        launch({ adminError = it }) {
+            api.adminUserAction(id, action, draftActionPassword.takeIf { action == "set_password" })
+            draftActionPassword = ""
+            adminInfo = when (action) {
+                "unlock" -> "Cuenta desbloqueada."
+                "reset_mfa" -> "2FA restablecido: en su próximo ingreso configurará la app autenticadora otra vez."
+                else -> "Contraseña restablecida y sesiones cerradas."
+            }
+            adminData = api.adminOverview()
+        }
+    }
+
+    fun startNewRole() {
+        editingRoleId = null
+        draftRoleId = ""
+        draftRoleName = ""
+        draftRoleDescription = ""
+        draftRoleProfile = "THERAPIST"
+        draftRolePermissions.clear()
+        adminError = null
+        adminInfo = null
+        screen = Screen.ADMIN_ROLE_EDIT
+    }
+
+    fun openRole(id: String) {
+        val role = adminData?.roles?.firstOrNull { it.id == id } ?: return
+        editingRoleId = id
+        draftRoleId = role.id
+        draftRoleName = role.name
+        draftRoleDescription = role.description.orEmpty()
+        draftRoleProfile = role.profile
+        draftRolePermissions.clear()
+        draftRolePermissions.addAll(role.permissions)
+        adminError = null
+        adminInfo = null
+        screen = Screen.ADMIN_ROLE_EDIT
+    }
+
+    fun toggleRolePermission(permission: String) {
+        if (permission in draftRolePermissions) draftRolePermissions.remove(permission)
+        else draftRolePermissions.add(permission)
+    }
+
+    fun saveRole() {
+        adminError = null
+        val editing = editingRoleId
+        launch({ adminError = it }) {
+            val body = buildJsonObject {
+                if (editing == null) put("id", draftRoleId.trim().uppercase())
+                put("name", draftRoleName.trim())
+                put("description", draftRoleDescription.trim())
+                put("profile", draftRoleProfile)
+                put("permissions", JsonArray(draftRolePermissions.map { JsonPrimitive(it) }))
+            }
+            if (editing == null) api.adminCreateRole(body) else api.adminUpdateRole(editing, body)
+            adminInfo = if (editing == null) "Rol creado." else "Rol actualizado. Los permisos aplican de inmediato."
+            adminData = api.adminOverview()
+            screen = Screen.ADMIN_ROLES
+        }
+    }
+
+    fun deleteRole() {
+        val id = editingRoleId ?: return
+        adminError = null
+        launch({ adminError = it }) {
+            api.adminDeleteRole(id)
+            adminInfo = "Rol borrado."
+            adminData = api.adminOverview()
+            screen = Screen.ADMIN_ROLES
+        }
+    }
+
+    // ------------------------------------------------------------------ navegación
 
     fun openTask(id: String, behaviorId: String? = null) {
         activeTaskId = id
@@ -526,27 +1194,59 @@ class PrototypeState {
         screen = Screen.PATIENT_TASK_HISTORY
     }
 
+    fun openPatient(id: String) {
+        activePatientId = id
+        showNewDiagnosisForm = false
+        draftDiagnosisCode = ""
+        draftDiagnosisLabel = ""
+        diagnosisError = null
+        screen = Screen.THERAPIST_PATIENT
+    }
+
+    fun openBehaviorDetail(id: String) {
+        activeBehaviorId = id
+        behaviorDetailTab = BehaviorTab.ACTIVIDADES
+        screen = Screen.THERAPIST_BEHAVIOR
+    }
+
+    fun openTaskDetail(id: String) { activeTaskId = id; screen = Screen.THERAPIST_TASK_DETAIL }
+
+    fun previewAsPatient(id: String) {
+        previewing = true
+        role = Role.PATIENT; meId = id; activePatientId = id; screen = Screen.PATIENT_HOME
+    }
+
+    fun exitPreview() {
+        val user = sessionUser ?: return
+        val userRole = Role.entries.firstOrNull { it.name == user.role } ?: return
+        previewing = false
+        role = userRole
+        screen = Screen.THERAPIST_PATIENT
+    }
+
+    // ------------------------------------------------------------------ registros del paciente
+
     fun saveTask(date: LocalDate = todayDate()) {
-        val behavior = activeBehavior()
         val task = activeTask()
-        if (behavior.recordsFor(task.dimension).any { it.date == date && it.phase == task.phase }) {
-            taskError = "Ya existe un registro de esta tarea para el ${date.dayOfMonth}/${date.monthNumber}/${date.year}."
-            return
-        }
         val observationMinutes = taskObservationMinutes.takeIf {
             task.taskType == TaskType.REGISTRO_AUTONOMO && task.dimension == Dimension.FRECUENCIA && it > 0
         }
-        val entry = TaskEntry(date, taskInputValue, taskNote.trim(), task.phase, observationMinutes)
-        task.status = TaskStatus.COMPLETADA
-        task.entries.add(entry)
-        if (task.taskType == TaskType.REGISTRO_AUTONOMO && task.phase == Phase.LINEA_BASE && behavior.baselineOpen) {
-            behavior.baselineEntries.add(BehaviorRecord("r${nextId++}", task.id, behavior.id, entry.date, entry.value, entry.note, Phase.LINEA_BASE, task.dimension, entry.observationMinutes))
+        taskError = null
+        launch({ taskError = it }) {
+            api.recordEntry(task.id, buildJsonObject {
+                put("date", date.toString())
+                put("value", taskInputValue)
+                put("note", taskNote.trim())
+                observationMinutes?.let { put("observation_minutes", it) }
+            })
+            reload()
+            taskEntryDate = date
+            lastSavedEntryDate = date
+            screen = Screen.PATIENT_DONE
         }
-        taskEntryDate = date
-        screen = Screen.PATIENT_DONE
     }
 
-    // Análogo a saveTask() pero para actividades con widget configurable: construye el WidgetValue
+    // Análogo a saveTask() pero para actividades con widget configurable: construye el valor
     // según el tipo de respuesta del widget y lo guarda con fecha y hora del registro.
     fun saveWidgetEntry(date: LocalDate = taskEntryDate, time: LocalTime = taskEntryTime) {
         val task = activeTask()
@@ -562,26 +1262,38 @@ class PrototypeState {
                 return
             }
         }
-        if (task.widgetEntries.any { it.date == date }) {
-            taskError = "Ya existe un registro de esta actividad para el ${date.dayOfMonth}/${date.monthNumber}/${date.year}."
-            return
-        }
         val value = when (widget.valueKind) {
-            WidgetValueKind.NUMERIC -> WidgetValue.Numeric(draftWidgetNumericValue, draftWidgetObservationMinutes.takeIf { it > 0 })
-            WidgetValueKind.YES_NO -> WidgetValue.YesNo(draftWidgetBoolValue)
-            WidgetValueKind.TEXT -> WidgetValue.Text(draftWidgetTextValue.trim())
-            WidgetValueKind.MULTI_SELECT -> WidgetValue.MultiSelect(draftWidgetSelectedOptions.toList())
+            WidgetValueKind.NUMERIC -> buildJsonObject {
+                put("value", draftWidgetNumericValue)
+                draftWidgetObservationMinutes.takeIf { it > 0 }?.let { put("observation_minutes", it) }
+            }
+            WidgetValueKind.YES_NO -> buildJsonObject { put("value", draftWidgetBoolValue) }
+            WidgetValueKind.TEXT -> buildJsonObject { put("value", draftWidgetTextValue.trim()) }
+            WidgetValueKind.MULTI_SELECT -> buildJsonObject {
+                put("values", JsonArray(draftWidgetSelectedOptions.map { JsonPrimitive(it) }))
+            }
         }
-        task.status = TaskStatus.COMPLETADA
-        task.widgetEntries.add(WidgetEntry("we${nextId++}", task.id, widget.id, date, time, value, taskNote.trim().ifBlank { null }))
-        taskEntryDate = date
-        screen = Screen.PATIENT_DONE
+        taskError = null
+        launch({ taskError = it }) {
+            api.recordWidgetEntry(task.id, buildJsonObject {
+                put("date", date.toString())
+                put("time", "${time.hour.toString().padStart(2, '0')}:${time.minute.toString().padStart(2, '0')}")
+                put("value", value)
+                taskNote.trim().takeIf { it.isNotEmpty() }?.let { put("note", it) }
+            })
+            reload()
+            taskEntryDate = date
+            lastSavedEntryDate = date
+            screen = Screen.PATIENT_DONE
+        }
     }
 
     fun toggleWidgetOption(option: String) {
         if (draftWidgetSelectedOptions.contains(option)) draftWidgetSelectedOptions.remove(option)
         else draftWidgetSelectedOptions.add(option)
     }
+
+    // ------------------------------------------------------------------ terapeuta
 
     fun startNewBehavior(patientId: String) {
         // Siempre se entra desde la ficha de un paciente: no hay atajo global que permita crear sin ese contexto.
@@ -602,73 +1314,79 @@ class PrototypeState {
             behaviorError = "Completa el nombre y la definición operacional de la conducta."
             return
         }
-        val patient = patient(draftPatientId)
-        val id = "b${nextId++}"
         val isMaladaptive = draftBehaviorType == BehaviorType.DESADAPTATIVA
-        patient.case.behaviorList.add(
-            Behavior(
-                id, patient.case.id, draftBehaviorName.trim(), draftDefinition.trim(),
-                draftBehaviorType, true,
-                behavioralFunctionId = if (isMaladaptive) draftBehavioralFunctionId else NO_APLICA_FUNCTION_ID,
-                replacementBehaviorId = if (isMaladaptive) draftReplacementBehaviorId else null,
-            )
-        )
-        activePatientId = patient.id
-        activeBehaviorId = id
-        behaviorDetailTab = BehaviorTab.ACTIVIDADES
-        draftBaselineDimensions.clear()
-        draftBaselineDimensions.addAll(listOf(Dimension.FRECUENCIA))
-        screen = Screen.THERAPIST_BASELINE_SETUP
+        behaviorError = null
+        launch({ behaviorError = it }) {
+            val id = api.createBehavior(buildJsonObject {
+                put("patient_id", draftPatientId)
+                put("name", draftBehaviorName.trim())
+                put("operational_definition", draftDefinition.trim())
+                put("type", draftBehaviorType.name)
+                if (isMaladaptive) {
+                    put("function_id", draftBehavioralFunctionId)
+                    draftReplacementBehaviorId?.let { put("replacement_behavior_id", it) }
+                }
+            })
+            reload()
+            activePatientId = draftPatientId
+            activeBehaviorId = id
+            behaviorDetailTab = BehaviorTab.ACTIVIDADES
+            draftBaselineDimensions.clear()
+            draftBaselineDimensions.add(Dimension.FRECUENCIA)
+            screen = Screen.THERAPIST_BASELINE_SETUP
+        }
     }
 
     fun configureBaseline() {
-        val behavior = activeBehavior()
-        val selected: List<Dimension> = draftBaselineDimensions.distinct().ifEmpty { listOf(Dimension.FRECUENCIA) }
-        behavior.baselineDimensions.clear()
-        behavior.baselineDimensions.addAll(selected)
-        selected.forEach { dimension ->
-            val taskTitle = when (dimension) {
-                Dimension.FRECUENCIA -> "Registrar frecuencia diaria"
-                Dimension.DURACION -> "Registrar duración diaria"
-                Dimension.INTENSIDAD -> "Registrar intensidad diaria"
-                else -> "Registrar conducta diaria"
-            }
-            val taskInstructions = when (dimension) {
-                Dimension.FRECUENCIA -> "Cuenta cuántas veces ocurrió la conducta en el día."
-                Dimension.DURACION -> "Anota cuántos minutos duró la conducta en el día."
-                Dimension.INTENSIDAD -> "Valora la intensidad de la conducta en una escala del 0 al 10."
-                else -> "Registra la conducta del día."
-            }
-            behavior.tasks.add(
-                TrackTask(
-                    "t${nextId++}", behavior.id, taskTitle, taskInstructions,
-                    TaskType.REGISTRO_AUTONOMO, dimension, null, "Hoy", true, "Diaria",
-                    null, false, Phase.LINEA_BASE, TaskStatus.PENDIENTE,
-                ),
-            )
+        val behaviorId = activeBehaviorId ?: return
+        val selected = draftBaselineDimensions.distinct().ifEmpty { listOf(Dimension.FRECUENCIA) }
+        launch {
+            api.configureBaseline(behaviorId, selected.map { it.name })
+            reload()
+            screen = Screen.THERAPIST_BEHAVIOR
         }
-        screen = Screen.THERAPIST_BEHAVIOR
     }
-
-    fun openPatient(id: String) {
-        activePatientId = id
-        showNewDiagnosisForm = false
-        draftDiagnosisCode = ""
-        draftDiagnosisLabel = ""
-        screen = Screen.THERAPIST_PATIENT
-    }
-    fun openBehaviorDetail(id: String) {
-        activeBehaviorId = id
-        behaviorDetailTab = BehaviorTab.ACTIVIDADES
-        screen = Screen.THERAPIST_BEHAVIOR
-    }
-    fun openTaskDetail(id: String) { activeTaskId = id; screen = Screen.THERAPIST_TASK_DETAIL }
 
     fun closeBaseline(id: String) {
-        val behavior = behavior(id)
-        if (behavior.baselineOpen) {
-            behavior.baselineOpen = false
-            behavior.baselineClosedOn = "Hoy"
+        launch {
+            api.closeBaseline(id)
+            reload()
+        }
+    }
+
+    // Catálogo editable: registra una función conductual nueva y la deja seleccionada.
+    fun createBehavioralFunction(label: String) {
+        if (label.isBlank()) return
+        launch({ behaviorError = it }) {
+            val id = api.createBehavioralFunction(label.trim())
+            reload()
+            draftBehavioralFunctionId = id
+            showNewFunctionForm = false
+            draftNewFunctionLabel = ""
+        }
+    }
+
+    // Asignar, no reemplazar: un paciente puede tener más de un código CIE-10 (comorbilidad).
+    fun assignDiagnosis(patientId: String, code: String, label: String) {
+        val trimmedCode = code.trim().uppercase()
+        if (trimmedCode.isBlank()) {
+            diagnosisError = "Escribe el código CIE-10."
+            return
+        }
+        diagnosisError = null
+        launch({ diagnosisError = it }) {
+            api.assignDiagnosis(patientId, trimmedCode, label.trim().ifBlank { trimmedCode })
+            reload()
+            showNewDiagnosisForm = false
+            draftDiagnosisCode = ""
+            draftDiagnosisLabel = ""
+        }
+    }
+
+    fun removeDiagnosis(patientId: String, code: String) {
+        launch({ diagnosisError = it }) {
+            api.removeDiagnosis(patientId, code)
+            reload()
         }
     }
 
@@ -708,203 +1426,69 @@ class PrototypeState {
         screen = Screen.THERAPIST_NEW_WIDGET
     }
 
-    // Crea una medición personalizada a partir del draft y la deja preseleccionada para la
-    // actividad que se está armando en THERAPIST_NEW_TASK.
-    fun saveCustomWidget(): String? {
+    // Crea una medición personalizada y la deja preseleccionada para la actividad en curso.
+    fun saveCustomWidget() {
         if (draftCustomWidgetName.isBlank()) {
             customWidgetError = "Completa el nombre de la variable a medir."
-            return null
+            return
         }
         val options = draftCustomWidgetOptionsText.split(",").map { it.trim() }.filter { it.isNotBlank() }
         if (draftCustomWidgetValueKind == WidgetValueKind.MULTI_SELECT && options.isEmpty()) {
             customWidgetError = "Agrega al menos una opción, separadas por coma."
-            return null
+            return
         }
-        val id = "cw${nextId++}"
-        customWidgets.add(
-            WidgetConfig(
-                id = id,
-                name = draftCustomWidgetName.trim(),
-                valueKind = draftCustomWidgetValueKind,
-                unit = draftCustomWidgetUnit.trim().ifBlank { null },
-                minValue = draftCustomWidgetMin.toDoubleOrNull(),
-                maxValue = draftCustomWidgetMax.toDoubleOrNull(),
-                options = options,
-                description = draftCustomWidgetDescription.trim().ifBlank { null },
-                isPreset = false,
-            )
-        )
-        draftSelectedWidgetId = id
-        draftUseWidgetSystem = true
-        screen = Screen.THERAPIST_NEW_TASK
-        return id
+        customWidgetError = null
+        launch({ customWidgetError = it }) {
+            val id = api.createWidget(buildJsonObject {
+                put("name", draftCustomWidgetName.trim())
+                put("value_kind", draftCustomWidgetValueKind.name)
+                draftCustomWidgetUnit.trim().takeIf { it.isNotEmpty() }?.let { put("unit", it) }
+                draftCustomWidgetMin.replace(',', '.').toDoubleOrNull()?.let { put("min_value", it) }
+                draftCustomWidgetMax.replace(',', '.').toDoubleOrNull()?.let { put("max_value", it) }
+                put("options", JsonArray(options.map { JsonPrimitive(it) }))
+                draftCustomWidgetDescription.trim().takeIf { it.isNotEmpty() }?.let { put("description", it) }
+            })
+            reload()
+            draftSelectedWidgetId = id
+            draftUseWidgetSystem = true
+            screen = Screen.THERAPIST_NEW_TASK
+        }
     }
 
     fun assign() {
-        val selected = draftBehaviorId?.let { runCatching { behavior(it) }.getOrNull() }
-        if (selected == null || draftTaskTitle.isBlank()) {
+        val behaviorId = draftBehaviorId
+        if (behaviorId == null || draftTaskTitle.isBlank()) {
             assignError = "Completa el nombre de la actividad."
             return
         }
-        val resolvedWidget = if (draftUseWidgetSystem) draftSelectedWidgetId?.let { widget(it) } else null
-        if (draftUseWidgetSystem && resolvedWidget == null) {
+        val widgetId = if (draftUseWidgetSystem) draftSelectedWidgetId?.takeIf { widget(it) != null } else null
+        if (draftUseWidgetSystem && widgetId == null) {
             assignError = "Selecciona un método de medición para la actividad."
             return
         }
-        selected.tasks.add(
-            TrackTask(
-                "t${nextId++}", selected.id, draftTaskTitle.trim(), draftInstructions.trim(),
-                taskType = if (resolvedWidget != null) TaskType.MEDICION_CONFIGURABLE else draftTaskType,
-                dimension = draftTaskDimension,
-                metricUnit = if (resolvedWidget != null || draftTaskType == TaskType.REGISTRO_AUTONOMO) null else draftMetricUnit,
-                assignedDate = draftAssignedDate.trim().ifBlank { "Hoy" },
-                isRecurring = draftIsRecurring,
-                frequency = if (draftIsRecurring) draftFrequency else null,
-                dueDate = draftDueDate.trim().ifBlank { null },
-                reminderActive = draftReminderActive,
-                phase = draftTaskPhase,
-                status = TaskStatus.PENDIENTE,
-                widgetConfig = resolvedWidget,
-                therapeuticGoal = draftTherapeuticGoal.trim().ifBlank { null },
-            )
-        )
-        // fase_actual de la conducta avanza sola si la fase elegida es más avanzada; nunca se toca a mano.
-        if (draftTaskPhase == Phase.INTERVENCION) closeBaseline(selected.id)
-        activePatientId = draftPatientId
-        activeBehaviorId = selected.id
-        screen = Screen.THERAPIST_ASSIGNED
-    }
-
-    fun previewAsPatient(id: String) {
-        role = Role.PATIENT; meId = id; activePatientId = id; screen = Screen.PATIENT_HOME
+        assignError = null
+        launch({ assignError = it }) {
+            val id = api.createTask(buildJsonObject {
+                put("behavior_id", behaviorId)
+                put("title", draftTaskTitle.trim())
+                put("instructions", draftInstructions.trim())
+                put("task_type", if (widgetId != null) TaskType.MEDICION_CONFIGURABLE.name else draftTaskType.name)
+                put("dimension", draftTaskDimension.name)
+                if (widgetId == null && draftTaskType != TaskType.REGISTRO_AUTONOMO) put("metric_unit", draftMetricUnit.name)
+                widgetId?.let { put("widget_id", it) }
+                put("assigned_date", draftAssignedDate.trim().ifBlank { "Hoy" })
+                draftDueDate.trim().takeIf { it.isNotEmpty() }?.let { put("due_date", it) }
+                put("is_recurring", draftIsRecurring)
+                if (draftIsRecurring) put("frequency", draftFrequency)
+                put("reminder_active", draftReminderActive)
+                put("phase", draftTaskPhase.name)
+                draftTherapeuticGoal.trim().takeIf { it.isNotEmpty() }?.let { put("therapeutic_goal", it) }
+            })
+            reload()
+            lastAssignedTaskId = id
+            activePatientId = draftPatientId
+            activeBehaviorId = behaviorId
+            screen = Screen.THERAPIST_ASSIGNED
+        }
     }
 }
-
-private fun samplePatients(): List<Patient> {
-    val anxiety = Behavior(
-        "b-ana-anxiety", "case-ana", "Episodios de ansiedad en clase",
-        "Episodios observables de ansiedad durante actividades académicas.", BehaviorType.DESADAPTATIVA, false,
-        baselineEntries = listOf(
-            BehaviorRecord("r-a1", "t-a-base", "b-ana-anxiety", LocalDate(2026, 9, 1), 5.0, "Cinco episodios en 45 minutos.", Phase.LINEA_BASE, Dimension.FRECUENCIA, 45),
-            BehaviorRecord("r-a2", "t-a-base", "b-ana-anxiety", LocalDate(2026, 9, 2), 6.0, "Seis episodios en 45 minutos.", Phase.LINEA_BASE, Dimension.FRECUENCIA, 45),
-            BehaviorRecord("r-a3", "t-a-base", "b-ana-anxiety", LocalDate(2026, 9, 3), 5.0, "Cinco episodios en 45 minutos.", Phase.LINEA_BASE, Dimension.FRECUENCIA, 45),
-            BehaviorRecord("r-a4", "t-a-base", "b-ana-anxiety", LocalDate(2026, 9, 4), 4.0, "Cuatro episodios en 30 minutos.", Phase.LINEA_BASE, Dimension.FRECUENCIA, 30),
-        ),
-        tasks = listOf(
-            TrackTask("t1", "b-ana-anxiety", "Registrar episodios de ansiedad del día", "Al terminar el día, anota cuántas veces sentiste un episodio de ansiedad marcado durante las clases.", TaskType.REGISTRO_AUTONOMO, Dimension.FRECUENCIA, null, "Hoy", true, "Diaria", null, true, Phase.INTERVENCION, TaskStatus.PENDIENTE),
-            TrackTask("t2", "b-ana-anxiety", "Escala de malestar antes de exponer en clase", "Justo antes de tu presentación, registra tu nivel de malestar de 0 (nada) a 10 (máximo).", TaskType.REGISTRO_AUTONOMO, Dimension.INTENSIDAD, null, "Hoy", true, "Personalizada", "Mié 3 sep", true, Phase.INTERVENCION, TaskStatus.PENDIENTE),
-            TrackTask("t0", "b-ana-anxiety", "Registrar episodios de ansiedad del día", "Al terminar el día, anota cuántas veces sentiste un episodio de ansiedad marcado.", TaskType.REGISTRO_AUTONOMO, Dimension.FRECUENCIA, null, "Ayer", true, "Diaria", null, true, Phase.INTERVENCION, TaskStatus.COMPLETADA, listOf(
-                TaskEntry(LocalDate(2026, 9, 5), 3.0, "Solo en la clase de la tarde.", Phase.INTERVENCION, 45),
-                TaskEntry(LocalDate(2026, 9, 6), 3.0, "La sesión observada duró una hora.", Phase.INTERVENCION, 60),
-                TaskEntry(LocalDate(2026, 9, 7), 2.0, "Dos episodios breves.", Phase.INTERVENCION, 45),
-                TaskEntry(LocalDate(2026, 9, 8), 2.0, "Mejor regulación durante la clase.", Phase.INTERVENCION, 60),
-            )),
-        ),
-    )
-    // Actividades demostrativas de cada medición: aparecen desde el primer inicio para que
-    // terapeuta y consultante puedan recorrer el flujo completo y ver series temporales.
-    val intensityWidget = presetWidgetCatalog().first { it.id == "w-escala" }
-    anxiety.tasks.add(
-        TrackTask("t-intensity-demo", anxiety.id, "Medir intensidad de ansiedad", "Después de cada clase, indica la intensidad percibida de ansiedad (1 = mínima, 10 = máxima).", TaskType.MEDICION_CONFIGURABLE, Dimension.INTENSIDAD, null, "Hoy", true, "Diaria", null, true, Phase.INTERVENCION, TaskStatus.COMPLETADA, widgetConfig = intensityWidget, therapeuticGoal = "Observar si la ansiedad disminuye con la práctica de regulación.", widgetEntries = listOf(
-            WidgetEntry("we-i1", "t-intensity-demo", intensityWidget.id, LocalDate(2026, 9, 7), LocalTime(16, 0), WidgetValue.Numeric(9.0), "Ansiedad alta antes de la exposición."),
-            WidgetEntry("we-i2", "t-intensity-demo", intensityWidget.id, LocalDate(2026, 9, 8), LocalTime(16, 0), WidgetValue.Numeric(8.0), null),
-            WidgetEntry("we-i3", "t-intensity-demo", intensityWidget.id, LocalDate(2026, 9, 9), LocalTime(16, 0), WidgetValue.Numeric(6.0), "Usé respiración diafragmática."),
-            WidgetEntry("we-i4", "t-intensity-demo", intensityWidget.id, LocalDate(2026, 9, 10), LocalTime(16, 0), WidgetValue.Numeric(4.0), "Pude participar con menos malestar."),
-        )),
-    )
-    val regulation = Behavior(
-        "b-ana-regulation", "case-ana", "Regular la ansiedad durante la exposición",
-        "Usar una estrategia de respiración y continuar la exposición sin abandonar la actividad.",
-        BehaviorType.ADAPTATIVA, false,
-        baselineEntries = listOf(
-            BehaviorRecord("r-rb1", "t-regulation-base", "b-ana-regulation", LocalDate(2026, 9, 1), 2.0, "Participó 2 veces sin estrategia definida.", Phase.LINEA_BASE, Dimension.FRECUENCIA),
-            BehaviorRecord("r-rb2", "t-regulation-base", "b-ana-regulation", LocalDate(2026, 9, 2), 1.0, "Participó una vez.", Phase.LINEA_BASE, Dimension.FRECUENCIA),
-            BehaviorRecord("r-rb3", "t-regulation-base", "b-ana-regulation", LocalDate(2026, 9, 3), 2.0, "Abandonó la exposición después de dos intentos.", Phase.LINEA_BASE, Dimension.FRECUENCIA),
-            BehaviorRecord("r-rb4", "t-regulation-base", "b-ana-regulation", LocalDate(2026, 9, 4), 1.0, "Necesitó retirarse del salón.", Phase.LINEA_BASE, Dimension.FRECUENCIA),
-        ),
-        tasks = listOf(
-            TrackTask("t-regulation-intervention", "b-ana-regulation", "Registrar participaciones usando respiración", "Después de cada clase, cuenta cuántas veces participaste y lograste permanecer en la actividad usando respiración.", TaskType.REGISTRO_AUTONOMO, Dimension.FRECUENCIA, null, "Hoy", true, "Diaria", null, true, Phase.INTERVENCION, TaskStatus.COMPLETADA, entries = listOf(
-                TaskEntry(LocalDate(2026, 9, 5), 2.0, "Usé respiración antes de responder.", Phase.INTERVENCION),
-                TaskEntry(LocalDate(2026, 9, 6), 3.0, "Permanecí toda la clase.", Phase.INTERVENCION),
-                TaskEntry(LocalDate(2026, 9, 7), 4.0, "Participé sin abandonar el salón.", Phase.INTERVENCION),
-                TaskEntry(LocalDate(2026, 9, 8), 5.0, "Me sentí capaz de continuar pese a la ansiedad.", Phase.INTERVENCION),
-            )),
-        ),
-    )
-    val durationWidget = presetWidgetCatalog().first { it.id == "w-duracion" }
-    anxiety.tasks.add(
-        TrackTask("t-duration-demo", anxiety.id, "Registrar duración de la crisis", "Anota cuántos minutos duró cada episodio de ansiedad.", TaskType.MEDICION_CONFIGURABLE, Dimension.DURACION, null, "Hoy", true, "Diaria", null, true, Phase.INTERVENCION, TaskStatus.COMPLETADA, widgetConfig = durationWidget, therapeuticGoal = "Reducir el tiempo de recuperación después de un episodio.", widgetEntries = listOf(
-            WidgetEntry("we-d1", "t-duration-demo", durationWidget.id, LocalDate(2026, 9, 7), LocalTime(17, 0), WidgetValue.Numeric(30.0), null),
-            WidgetEntry("we-d2", "t-duration-demo", durationWidget.id, LocalDate(2026, 9, 8), LocalTime(17, 0), WidgetValue.Numeric(22.0), null),
-            WidgetEntry("we-d3", "t-duration-demo", durationWidget.id, LocalDate(2026, 9, 9), LocalTime(17, 0), WidgetValue.Numeric(12.0), "La crisis terminó más rápido."),
-        )),
-    )
-    val complianceWidget = presetWidgetCatalog().first { it.id == "w-cumplimiento" }
-    anxiety.tasks.add(
-        TrackTask("t-compliance-demo", anxiety.id, "Cumplir la estrategia de respiración", "Registra qué porcentaje de las veces realizaste la estrategia acordada.", TaskType.MEDICION_CONFIGURABLE, Dimension.FRECUENCIA, null, "Hoy", true, "Diaria", null, true, Phase.INTERVENCION, TaskStatus.COMPLETADA, widgetConfig = complianceWidget, therapeuticGoal = "Conocer la adherencia a la estrategia terapéutica.", widgetEntries = listOf(
-            WidgetEntry("we-c1", "t-compliance-demo", complianceWidget.id, LocalDate(2026, 9, 7), LocalTime(20, 0), WidgetValue.Numeric(40.0), null),
-            WidgetEntry("we-c2", "t-compliance-demo", complianceWidget.id, LocalDate(2026, 9, 8), LocalTime(20, 0), WidgetValue.Numeric(65.0), null),
-            WidgetEntry("we-c3", "t-compliance-demo", complianceWidget.id, LocalDate(2026, 9, 9), LocalTime(20, 0), WidgetValue.Numeric(90.0), "La estrategia ya forma parte de mi rutina."),
-        )),
-    )
-    val emotionalControlWidget = WidgetConfig("cw-control-emocional-demo", "Control emocional", WidgetValueKind.NUMERIC, unit = "/7", minValue = 1.0, maxValue = 7.0, description = "Ejemplo personalizado: 1 = poco control y 7 = alto control.")
-    anxiety.tasks.add(
-        TrackTask("t-custom-demo", anxiety.id, "Valorar control emocional", "Al finalizar el día, califica tu control emocional de 1 (poco) a 7 (alto).", TaskType.MEDICION_CONFIGURABLE, Dimension.INTENSIDAD, null, "Hoy", true, "Diaria", null, true, Phase.INTERVENCION, TaskStatus.COMPLETADA, widgetConfig = emotionalControlWidget, therapeuticGoal = "Personalizar la evaluación cuando una escala estándar no describe el caso.", widgetEntries = listOf(
-            WidgetEntry("we-e1", "t-custom-demo", emotionalControlWidget.id, LocalDate(2026, 9, 7), LocalTime(21, 0), WidgetValue.Numeric(2.0), null),
-            WidgetEntry("we-e2", "t-custom-demo", emotionalControlWidget.id, LocalDate(2026, 9, 8), LocalTime(21, 0), WidgetValue.Numeric(4.0), null),
-            WidgetEntry("we-e3", "t-custom-demo", emotionalControlWidget.id, LocalDate(2026, 9, 9), LocalTime(21, 0), WidgetValue.Numeric(6.0), "Pude identificar y regular mis emociones."),
-        )),
-    )
-    val participation = Behavior(
-        "b-ana-participation", "case-ana", "Participar en clase a pesar de la ansiedad",
-        "Intervenciones o participaciones realizadas durante la clase aunque exista ansiedad.",
-        BehaviorType.ADAPTATIVA, false,
-        baselineEntries = listOf(
-            BehaviorRecord("r-p1", "t-p-base", "b-ana-participation", LocalDate(2026, 9, 1), 1.0, "", Phase.LINEA_BASE, Dimension.FRECUENCIA, 45),
-            BehaviorRecord("r-p2", "t-p-base", "b-ana-participation", LocalDate(2026, 9, 2), 2.0, "", Phase.LINEA_BASE, Dimension.FRECUENCIA, 45),
-            BehaviorRecord("r-p3", "t-p-base", "b-ana-participation", LocalDate(2026, 9, 3), 1.0, "", Phase.LINEA_BASE, Dimension.FRECUENCIA, 45),
-        ),
-        tasks = listOf(
-            TrackTask("t3", "b-ana-participation", "Registrar participaciones en clase", "Cada día, cuenta cuántas veces participaste en clase aunque sintieras ansiedad.", TaskType.REGISTRO_AUTONOMO, Dimension.FRECUENCIA, null, "Hoy", true, "Diaria", null, true, Phase.INTERVENCION, TaskStatus.PENDIENTE),
-        ),
-    )
-    val sleep = Behavior("b-dan-sleep", "case-daniel", "Minutos para conciliar el sueño", "Tiempo entre apagar la luz y quedarse dormido.", BehaviorType.DESADAPTATIVA, true)
-    sleep.tasks.add(TrackTask("d1", sleep.id, "Tiempo que tardaste en dormirte", "Cada mañana estima cuántos minutos pasaron desde que apagaste la luz hasta quedarte dormido.", TaskType.REGISTRO_AUTONOMO, Dimension.DURACION, null, "Hoy", true, "Diaria", null, false, Phase.LINEA_BASE, TaskStatus.PENDIENTE))
-    return listOf(
-        Patient(
-            "ana", "Ana Torres", 20, "Psicología · 4.º sem", 0xFF7B66C2L, "Ansiedad social",
-            SingleCase("case-ana", "ana", "Caso de ansiedad social", listOf(anxiety, participation, regulation)),
-            diagnoses = listOf(Cie10Diagnosis("F40.1", "Fobia social")),
-        ),
-        Patient(
-            "daniel", "Daniel Ruiz", 23, "Ing. Industrial · 8.º sem", 0xFFFF6B56L, "Insomnio de conciliación",
-            SingleCase("case-daniel", "daniel", "Caso de insomnio", listOf(sleep)),
-            diagnoses = listOf(Cie10Diagnosis("F51.0", "Insomnio no orgánico")),
-        ),
-    )
-}
-
-// Catálogo semilla: el terapeuta puede agregar funciones nuevas desde el formulario de conducta
-// cuando el análisis funcional del caso lo requiera.
-private fun seedBehavioralFunctions(): List<BehavioralFunctionOption> = listOf(
-    BehavioralFunctionOption(NO_APLICA_FUNCTION_ID, "No aplica"),
-    BehavioralFunctionOption("fn-atencion", "Atención"),
-    BehavioralFunctionOption("fn-escape", "Escape / evitación"),
-    BehavioralFunctionOption("fn-tangible", "Tangible"),
-    BehavioralFunctionOption("fn-sensorial", "Sensorial"),
-    BehavioralFunctionOption("fn-comunicacion", "Comunicación"),
-)
-
-// Catálogo de apoyo, no exhaustivo: códigos CIE-10 (cap. V, OMS — trastornos mentales y del
-// comportamiento) frecuentes en consulta psicológica universitaria. El terapeuta puede asignar
-// cualquier otro código a mano si el caso no está cubierto por esta lista.
-private fun seedCie10(): List<Cie10Diagnosis> = listOf(
-    Cie10Diagnosis("F41.1", "Trastorno de ansiedad generalizada"),
-    Cie10Diagnosis("F41.0", "Trastorno de pánico"),
-    Cie10Diagnosis("F40.1", "Fobia social"),
-    Cie10Diagnosis("F43.1", "Trastorno de estrés postraumático"),
-    Cie10Diagnosis("F32.9", "Episodio depresivo, no especificado"),
-    Cie10Diagnosis("F51.0", "Insomnio no orgánico"),
-    Cie10Diagnosis("F90.0", "Trastorno de la actividad y la atención"),
-    Cie10Diagnosis("F84.0", "Autismo infantil"),
-)

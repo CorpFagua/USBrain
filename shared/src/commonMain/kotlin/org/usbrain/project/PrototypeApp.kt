@@ -8,6 +8,7 @@ package org.usbrain.project
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,14 +27,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DatePicker
@@ -43,6 +47,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -72,6 +77,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -92,17 +98,31 @@ import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.math.roundToInt
+import io.github.alexzhirkevich.qrose.rememberQrCodePainter
+import org.usbrain.project.data.Enrollment
 
 @Composable
 fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        topBar = { StatusBanners(state) },
         bottomBar = { if (showsBottomBar(state)) BottomBar(state) },
         floatingActionButton = {
             // "Crear" siempre como botón flotante en las listas de este flujo (conductas,
             // actividades); el resto de acciones va como botón normal dentro del detalle.
+            // Los botones de crear dependen de los permisos del rol, no del nombre del rol.
             val behaviorId = state.activeBehaviorId
-            if (state.screen == Screen.THERAPIST_PATIENT) {
+            if (state.screen == Screen.ADMIN_USERS && state.can("users.manage")) {
+                FloatingActionButton(onClick = { state.startNewUser() }) {
+                    Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                }
+            } else if (state.screen == Screen.ADMIN_ROLES && state.can("roles.manage")) {
+                FloatingActionButton(onClick = { state.startNewRole() }) {
+                    Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                }
+            } else if (!state.canEditCases || state.previewing) {
+                // sin acciones de creación (solo lectura)
+            } else if (state.screen == Screen.THERAPIST_PATIENT) {
                 FloatingActionButton(onClick = { state.startNewBehavior(state.activePatientId) }) {
                     Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 }
@@ -116,8 +136,14 @@ fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit
     ) { inner ->
         Box(Modifier.fillMaxSize().padding(inner)) {
             when (state.screen) {
+                Screen.SPLASH -> SplashScreen(state)
                 Screen.LOGIN -> LoginScreen(state)
                 Screen.TWO_FACTOR -> TwoFactorScreen(state)
+                Screen.RECOVERY_CODES -> RecoveryCodesScreen(state)
+                Screen.FORGOT_PASSWORD -> ForgotPasswordScreen(state)
+                Screen.PIN_SETUP -> PinSetupScreen(state)
+                Screen.BIOMETRIC_OFFER -> BiometricOfferScreen(state)
+                Screen.LOCK -> LockScreen(state)
                 Screen.PATIENT_HOME -> PatientHomeScreen(state, dark, onToggleTheme)
                 Screen.PATIENT_BEHAVIORS -> PatientBehaviorsScreen(state)
                 Screen.PATIENT_BEHAVIOR -> PatientBehaviorScreen(state)
@@ -138,6 +164,11 @@ fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit
                 Screen.THERAPIST_ASSIGNED -> TherapistAssignedScreen(state)
                 Screen.THERAPIST_PROFILE -> TherapistProfileScreen(state)
                 Screen.ADMIN_HOME -> AdminHomeScreen(state, dark, onToggleTheme)
+                Screen.ADMIN_USERS -> AdminUsersScreen(state)
+                Screen.ADMIN_USER_EDIT -> AdminUserEditScreen(state)
+                Screen.ADMIN_ROLES -> AdminRolesScreen(state)
+                Screen.ADMIN_ROLE_EDIT -> AdminRoleEditScreen(state)
+                Screen.ADMIN_PROFILE -> AdminProfileScreen(state)
             }
         }
     }
@@ -146,7 +177,8 @@ fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit
 private fun showsBottomBar(state: PrototypeState): Boolean {
     if (state.role == null) return false
     return state.screen !in listOf(
-        Screen.LOGIN, Screen.TWO_FACTOR,
+        Screen.SPLASH, Screen.LOGIN, Screen.TWO_FACTOR, Screen.RECOVERY_CODES, Screen.FORGOT_PASSWORD,
+        Screen.PIN_SETUP, Screen.BIOMETRIC_OFFER, Screen.LOCK, Screen.ADMIN_USER_EDIT, Screen.ADMIN_ROLE_EDIT,
         // Al entrar a una conducta quedas dentro de ese flujo (Historial → conducta → tarea /
         // historial de registros): las tabs se ocultan hasta volver con el botón atrás.
         // PATIENT_BEHAVIORS (la pestaña "Historial" en sí) sí muestra las tabs, por eso no está en esta lista.
@@ -162,7 +194,7 @@ private fun showsBottomBar(state: PrototypeState): Boolean {
 
 /** Botón circular flotante (sin caja rectangular) para acciones puntuales del header de cada pantalla. */
 @Composable
-private fun CircleIconButton(onClick: () -> Unit, content: @Composable () -> Unit) {
+internal fun CircleIconButton(onClick: () -> Unit, content: @Composable () -> Unit) {
     Surface(
         onClick = onClick,
         shape = CircleShape,
@@ -176,7 +208,7 @@ private fun CircleIconButton(onClick: () -> Unit, content: @Composable () -> Uni
 
 /** Header de las pantallas de inicio: avatar + saludo a la izquierda, acciones (tema/cerrar sesión) a la derecha. */
 @Composable
-private fun HomeHeader(
+internal fun HomeHeader(
     greeting: String,
     name: String,
     dark: Boolean,
@@ -216,7 +248,7 @@ private fun HomeHeader(
 
 /** Header de las pantallas secundarias: botón circular de volver + título, sin barra ni caja de fondo. */
 @Composable
-private fun BackHeader(title: String, onBack: () -> Unit) {
+internal fun BackHeader(title: String, onBack: () -> Unit) {
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -234,6 +266,8 @@ private fun BackHeader(title: String, onBack: () -> Unit) {
  */
 private fun parentTab(screen: Screen): Screen = when (screen) {
     Screen.PATIENT_TASK, Screen.PATIENT_DONE -> Screen.PATIENT_HOME
+    Screen.ADMIN_USER_EDIT -> Screen.ADMIN_USERS
+    Screen.ADMIN_ROLE_EDIT -> Screen.ADMIN_ROLES
     // Conducta y su historial cuelgan de la pestaña "Historial", no de "Inicio".
     Screen.PATIENT_BEHAVIOR, Screen.PATIENT_TASK_HISTORY -> Screen.PATIENT_BEHAVIORS
     Screen.THERAPIST_PATIENT, Screen.THERAPIST_PATIENT_INFO, Screen.THERAPIST_BEHAVIOR, Screen.THERAPIST_TASK_DETAIL,
@@ -252,7 +286,7 @@ private fun BottomBar(state: PrototypeState) {
         horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        tabs.forEach { (target, label, glyph) ->
+        tabs.filter { tab -> tab.permission == null || state.can(tab.permission) }.forEach { (target, label, glyph) ->
             val selected = current == target
             Surface(
                 onClick = { state.screen = target },
@@ -273,7 +307,7 @@ private fun BottomBar(state: PrototypeState) {
 /* ----------------------------- utilidades UI ----------------------------- */
 
 @Composable
-private fun ScreenScaffold(content: @Composable ColumnScope.() -> Unit) {
+internal fun ScreenScaffold(content: @Composable ColumnScope.() -> Unit) {
     // Sin statusBarsPadding(): Scaffold ya reserva ese espacio en `inner` al no haber topBar;
     // duplicarlo aquí dejaba un hueco enorme y vacío arriba de cada pantalla.
     Column(
@@ -284,7 +318,7 @@ private fun ScreenScaffold(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun SectionLabel(text: String, modifier: Modifier = Modifier, maxLines: Int = Int.MAX_VALUE, overflow: TextOverflow = TextOverflow.Clip) {
+internal fun SectionLabel(text: String, modifier: Modifier = Modifier, maxLines: Int = Int.MAX_VALUE, overflow: TextOverflow = TextOverflow.Clip) {
     Text(
         text.uppercase(),
         modifier = modifier,
@@ -298,7 +332,7 @@ private fun SectionLabel(text: String, modifier: Modifier = Modifier, maxLines: 
 }
 
 @Composable
-private fun FieldLabel(text: String) {
+internal fun FieldLabel(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.labelLarge,
@@ -309,7 +343,7 @@ private fun FieldLabel(text: String) {
 
 /** Chip seleccionable en forma de píldora completa (redondeo total, no la esquina M3 por defecto). */
 @Composable
-private fun TabChip(
+internal fun TabChip(
     selected: Boolean,
     onClick: () -> Unit,
     label: String,
@@ -342,7 +376,7 @@ private fun TabChip(
 @Composable
 // Sin relleno de color: fondo neutro (blanco/negro real) + borde y texto del color de acento,
 // para que el contraste sea real en vez de un lavado pálido del color semántico.
-private fun Pill(text: String, accent: Color) {
+internal fun Pill(text: String, accent: Color) {
     Box(
         Modifier
             .clip(RoundedCornerShape(50))
@@ -356,7 +390,7 @@ private fun Pill(text: String, accent: Color) {
 
 /** Desplegable simple: botón con la selección actual + menú. `options` es lista de (id, etiqueta). */
 @Composable
-private fun DropdownField(
+internal fun DropdownField(
     label: String,
     selectedLabel: String?,
     placeholder: String,
@@ -407,7 +441,7 @@ private fun Avatar(patient: Patient, size: Dp = 42.dp) {
 }
 
 @Composable
-private fun RowScope.StatTile(value: String, label: String, accent: Color) {
+internal fun RowScope.StatTile(value: String, label: String, accent: Color) {
     ElevatedCard(Modifier.weight(1f)) {
         Column(
             Modifier.fillMaxWidth().padding(12.dp),
@@ -767,61 +801,127 @@ private fun LegendDot(color: Color, label: String) {
 
 /* ----------------------------- acceso ----------------------------- */
 
+/* ----------------------------- sesión ----------------------------- */
+
+/** Franja superior: progreso de una operación en curso, avisos de error y modo vista previa. */
+@Composable
+private fun StatusBanners(state: PrototypeState) {
+    Column(Modifier.fillMaxWidth().statusBarsPadding()) {
+        if (state.busy) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
+        if (state.previewing) {
+            Surface(color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Vista previa como paciente · solo lectura",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { state.exitPreview() }) { Text("Salir") }
+                }
+            }
+        }
+        state.banner?.let { message ->
+            Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { state.banner = null }) { Text("Cerrar") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun BrandHeader() {
+    UsBrainMark(size = 60.dp)
+    Spacer(Modifier.height(12.dp))
+    Row {
+        Text("US", color = Brand.Orange, fontWeight = FontWeight.Bold, fontSize = 26.sp)
+        Text("Brain", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 26.sp)
+    }
+    Text(
+        "REGISTRA · ENTIENDE · TRANSFORMA",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 8.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Medium,
+    )
+}
+
+/** Al abrir la app con una sesión guardada: se renueva en silencio antes de mostrar el inicio. */
+@Composable
+private fun SplashScreen(state: PrototypeState) {
+    Column(
+        Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        BrandHeader()
+        Spacer(Modifier.height(28.dp))
+        val error = state.connectionError
+        if (error == null) {
+            CircularProgressIndicator()
+            Spacer(Modifier.height(12.dp))
+            Text("Restaurando tu sesión…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = { state.start() }) { Text("Reintentar") }
+            TextButton(onClick = { state.logout() }) { Text("Iniciar sesión con otra cuenta") }
+        }
+    }
+}
+
 @Composable
 private fun LoginScreen(state: PrototypeState) {
-    val email = remember(state.loginRole) {
-        mutableStateOf(
-            when (state.loginRole) {
-                Role.PATIENT -> "ana.torres@usbbog.edu.co"
-                Role.THERAPIST -> "e.patino@usb.edu.co"
-                Role.ADMIN -> "admin@usbbog.edu.co"
-            },
-        )
-    }
-    val pass = remember(state.loginRole) { mutableStateOf("claveDemo2026") }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(16.dp))
-        UsBrainMark(size = 60.dp)
-        Spacer(Modifier.height(12.dp))
-        Row {
-            Text("US", color = Brand.Orange, fontWeight = FontWeight.Bold, fontSize = 26.sp)
-            Text("Brain", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 26.sp)
-        }
-        Text(
-            "REGISTRA · ENTIENDE · TRANSFORMA",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 8.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Medium,
-        )
+        BrandHeader()
         Spacer(Modifier.height(28.dp))
-        SectionLabel("Ingresa como", Modifier.fillMaxWidth().padding(bottom = 8.dp))
-        // Los perfiles disponibles salen de state.roleProfiles: agregar un rol nuevo al catálogo
-        // lo hace aparecer aquí solo, sin tocar esta pantalla.
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            state.roleProfiles.forEach { profile ->
-                RoleChoiceCard(profile, state.loginRole == profile.role) { state.loginRole = profile.role }
-            }
-        }
-        Spacer(Modifier.height(18.dp))
+        // El rol (paciente, terapeuta, administrador) lo define la cuenta en el servidor:
+        // ya no se elige aquí.
         OutlinedTextField(
-            email.value, { email.value = it }, Modifier.fillMaxWidth(),
+            state.loginEmail, { state.loginEmail = it.trim() }, Modifier.fillMaxWidth(),
             label = { Text("Correo institucional") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
         )
         Spacer(Modifier.height(10.dp))
         OutlinedTextField(
-            pass.value, { pass.value = it }, Modifier.fillMaxWidth(),
+            state.loginPassword, { state.loginPassword = it }, Modifier.fillMaxWidth(),
             label = { Text("Contraseña") }, singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         )
-        Spacer(Modifier.height(18.dp))
-        Button(onClick = { state.screen = Screen.TWO_FACTOR }, Modifier.fillMaxWidth().height(50.dp)) {
-            Text("Iniciar sesión")
+        state.authInfo?.let {
+            Spacer(Modifier.height(10.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = LocalUsBrainSemantic.current.success, modifier = Modifier.fillMaxWidth())
         }
+        state.authError?.let {
+            Spacer(Modifier.height(10.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
+        }
+        Spacer(Modifier.height(18.dp))
+        Button(onClick = { state.submitLogin() }, Modifier.fillMaxWidth().height(50.dp), enabled = !state.busy) {
+            Text(if (state.busy) "Verificando…" else "Iniciar sesión")
+        }
+        TextButton(onClick = { state.openForgotPassword() }) { Text("¿Olvidaste tu contraseña?") }
         Spacer(Modifier.height(12.dp))
         Text(
-            "A continuación se solicita un código de verificación (2FA), requisito de seguridad para los datos clínicos.",
+            "A continuación se solicita un código de tu app autenticadora (2FA), requisito de seguridad para los datos clínicos.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -836,44 +936,16 @@ private fun LoginScreen(state: PrototypeState) {
 }
 
 @Composable
-private fun RoleChoiceCard(profile: RoleProfile, selected: Boolean, onClick: () -> Unit) {
-    val border = if (selected) {
-        BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
-    } else {
-        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    }
-    OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth(), border = border) {
-        Row(
-            Modifier.padding(13.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Box(
-                Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(Color(profile.badgeColor)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(profile.displayName.first().uppercase(), color = Color.White, fontWeight = FontWeight.Bold)
-            }
-            Column(Modifier.weight(1f)) {
-                Text(profile.displayName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Text(profile.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (selected) {
-                Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-}
-
-@Composable
 private fun TwoFactorScreen(state: PrototypeState) {
-    val digits = remember { mutableStateListOf("3", "0", "4", "9", "1", "7") }
+    val enrollment = state.enrollment
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        CircleIconButton(onClick = { state.screen = Screen.LOGIN }) { NavGlyph("back", selected = false) }
-        Spacer(Modifier.height(16.dp))
+        Box(Modifier.fillMaxWidth()) {
+            CircleIconButton(onClick = { state.cancelLogin() }) { NavGlyph("back", selected = false) }
+        }
         Box(
             Modifier.size(76.dp).clip(RoundedCornerShape(50))
                 .background(MaterialTheme.colorScheme.surface)
@@ -882,45 +954,123 @@ private fun TwoFactorScreen(state: PrototypeState) {
         ) {
             Text("2FA", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
         }
-        Spacer(Modifier.height(16.dp))
         Text(
-            "Verificación en dos pasos",
+            if (enrollment != null) "Configura tu app autenticadora" else "Verificación en dos pasos",
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Ingresa el código de 6 dígitos enviado a tu correo institucional.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
+        if (enrollment != null) {
+            EnrollmentInstructions(enrollment)
+        } else {
+            Text(
+                if (state.useRecoveryCode) "Escribe uno de los códigos de recuperación que guardaste al activar el 2FA."
+                else "Abre tu app autenticadora (Google o Microsoft Authenticator) e ingresa el código de 6 dígitos de USBrain.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
+        OutlinedTextField(
+            value = state.mfaCode,
+            onValueChange = { v ->
+                state.mfaCode = if (state.useRecoveryCode) v.uppercase().take(11) else v.filter { it.isDigit() }.take(6)
+            },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text(if (state.useRecoveryCode) "Código de recuperación" else "Código de 6 dígitos") },
+            textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 22.sp, letterSpacing = 4.sp),
+            keyboardOptions = KeyboardOptions(keyboardType = if (state.useRecoveryCode) KeyboardType.Ascii else KeyboardType.NumberPassword),
         )
-        Spacer(Modifier.height(18.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            digits.forEachIndexed { i, d ->
-                OutlinedTextField(
-                    value = d,
-                    onValueChange = { v -> digits[i] = v.filter { it.isDigit() }.take(1) },
-                    modifier = Modifier.width(42.dp),
-                    singleLine = true,
-                    textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                )
+        state.authError?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+        }
+        Button(onClick = { state.submitMfa() }, Modifier.fillMaxWidth().height(50.dp), enabled = !state.busy) {
+            Text(if (enrollment != null) "Activar y entrar" else "Verificar e ingresar")
+        }
+        if (enrollment == null) {
+            TextButton(onClick = {
+                state.useRecoveryCode = !state.useRecoveryCode
+                state.mfaCode = ""
+                state.authError = null
+            }) {
+                Text(if (state.useRecoveryCode) "Usar el código de la app autenticadora" else "¿Perdiste tu teléfono? Usar un código de recuperación")
             }
         }
-        Spacer(Modifier.height(10.dp))
+        OutlinedButton(onClick = { state.cancelLogin() }, Modifier.fillMaxWidth()) { Text("Cancelar") }
+    }
+}
+
+@Composable
+private fun EnrollmentInstructions(enrollment: Enrollment) {
+    val uriHandler = LocalUriHandler.current
+    Text(
+        "1. Instala Google Authenticator o Microsoft Authenticator.\n" +
+            "2. Escanea este código QR, o toca \"Abrir en la app\" si estás en el mismo teléfono.\n" +
+            "3. Escribe el código de 6 dígitos que aparece en la app.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Box(
+        Modifier.size(200.dp).clip(RoundedCornerShape(16.dp)).background(Color.White).padding(12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            painter = rememberQrCodePainter(enrollment.otpauthUri),
+            contentDescription = "Código QR para la app autenticadora",
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+    OutlinedButton(onClick = { runCatching { uriHandler.openUri(enrollment.otpauthUri) } }, Modifier.fillMaxWidth()) {
+        Text("Abrir en la app autenticadora")
+    }
+    Text("¿No puedes escanear? Ingresa esta clave manualmente:", style = MaterialTheme.typography.labelMedium)
+    SelectionContainer {
         Text(
-            "Código de demostración precargado · 304 917",
-            style = MaterialTheme.typography.labelSmall,
+            enrollment.secret.chunked(4).joinToString(" "),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/** Se muestran una sola vez, después de enrolar: el servidor solo guarda su hash. */
+@Composable
+private fun RecoveryCodesScreen(state: PrototypeState) {
+    ScreenScaffold {
+        Spacer(Modifier.height(12.dp))
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { SuccessBadge() }
+        Text(
+            "Verificación en dos pasos activada",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            "Guarda estos códigos de recuperación en un lugar seguro. Cada uno sirve una sola vez para entrar " +
+                "si pierdes tu teléfono. No los volverás a ver.",
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(18.dp))
-        Button(onClick = { state.verify() }, Modifier.fillMaxWidth().height(50.dp)) {
-            Text("Verificar e ingresar")
+        ElevatedCard(Modifier.fillMaxWidth()) {
+            SelectionContainer {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    state.recoveryCodes.chunked(2).forEach { pair ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            pair.forEach { code ->
+                                Text(code, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+            }
         }
-        Spacer(Modifier.height(10.dp))
-        OutlinedButton(onClick = { state.screen = Screen.LOGIN }, Modifier.fillMaxWidth()) { Text("Cancelar") }
+        Button(onClick = { state.confirmRecoveryCodesSaved() }, Modifier.fillMaxWidth().height(50.dp), enabled = !state.busy) {
+            Text("Ya los guardé, continuar")
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -931,7 +1081,6 @@ private fun PatientHomeScreen(state: PrototypeState, dark: Boolean, onToggleThem
     val p = state.me()
     val caseId = state.caseForPatient(p.id)
     val behaviors = if (caseId != null) state.behaviorsForCase(caseId) else emptyList()
-    val done = p.tasks.filter { it.status == TaskStatus.COMPLETADA }
     val pending = behaviors.flatMap { b -> state.tasksForBehavior(b.id).filter { it.status == TaskStatus.PENDIENTE } }
     ScreenScaffold {
         HomeHeader(
@@ -943,7 +1092,8 @@ private fun PatientHomeScreen(state: PrototypeState, dark: Boolean, onToggleThem
             avatar = { Avatar(p) },
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            StatTile("${3 + done.size}", "días de racha", MaterialTheme.colorScheme.primary)
+            val streak = state.streakDays(p)
+            StatTile("$streak", if (streak == 1) "día de racha" else "días de racha", MaterialTheme.colorScheme.primary)
             StatTile("${pending.size}", if (pending.size == 1) "tarea pendiente" else "tareas pendientes", MaterialTheme.colorScheme.onSurface)
         }
         // Inicio es solo la bandeja de hoy: qué falta por registrar. El resto —conductas,
@@ -1465,7 +1615,9 @@ private fun ScaleSlider(state: PrototypeState, min: Float, max: Float, steps: In
 private fun PatientDoneScreen(state: PrototypeState) {
     val p = state.me()
     val t = state.activeTask()
-    val entry = t.entries.last()
+    val savedDate = state.lastSavedEntryDate
+    val entry = t.entries.lastOrNull { it.date == savedDate } ?: t.entries.lastOrNull()
+    val widgetEntry = t.widgetEntries.lastOrNull { it.date == savedDate } ?: t.widgetEntries.lastOrNull()
     ScreenScaffold {
         Spacer(Modifier.height(12.dp))
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { SuccessBadge() }
@@ -1495,20 +1647,23 @@ private fun PatientDoneScreen(state: PrototypeState) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
-                val summary = if (t.taskType != TaskType.REGISTRO_AUTONOMO && t.metricUnit == MetricUnit.SOLO_COMPLETADO) {
-                    "Completada"
-                } else {
-                    "${fmt(entry.value)} ${taskUnitLabel(t)}"
+                val summary = when {
+                    widgetEntry != null && t.widgetConfig != null ->
+                        widgetValueSummary(widgetEntry.value) + (t.widgetConfig.unit?.let { " $it" } ?: "")
+                    t.taskType != TaskType.REGISTRO_AUTONOMO && t.metricUnit == MetricUnit.SOLO_COMPLETADO -> "Completada"
+                    entry != null -> "${fmt(entry.value)} ${taskUnitLabel(t)}"
+                    else -> "Guardado"
                 }
+                val note = if (t.widgetConfig != null) widgetEntry?.note.orEmpty() else entry?.note.orEmpty()
                 Text(
                     summary,
                     style = MaterialTheme.typography.displaySmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
                 )
-                if (entry.note.isNotBlank()) {
+                if (note.isNotBlank()) {
                     Text(
-                        "“${entry.note}”",
+                        "“$note”",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontStyle = FontStyle.Italic,
@@ -1581,12 +1736,12 @@ private fun PatientProfileScreen(state: PrototypeState) {
         }
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                InfoRow("Terapeuta", "José E. Patiño")
+                InfoRow("Terapeuta", p.therapistName.ifBlank { "Sin asignar" })
                 InfoRow("Condición en seguimiento", p.condition)
                 InfoRow("Fase actual", p.phase.label)
-                InfoRow("Autenticación", "2FA activada ✓")
             }
         }
+        SecuritySettingsCard(state)
         OutlinedCard(Modifier.fillMaxWidth()) {
             Text(
                 "Tus datos de conducta son información clínica sensible. Solo tú y tu terapeuta asignado pueden verlos " +
@@ -1602,7 +1757,7 @@ private fun PatientProfileScreen(state: PrototypeState) {
 }
 
 @Composable
-private fun DiagnosisRow(dx: Cie10Diagnosis, onRemove: () -> Unit) {
+private fun DiagnosisRow(dx: Cie10Diagnosis, canRemove: Boolean = true, onRemove: () -> Unit) {
     OutlinedCard(Modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(12.dp),
@@ -1613,13 +1768,13 @@ private fun DiagnosisRow(dx: Cie10Diagnosis, onRemove: () -> Unit) {
                 Text(dx.code, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                 Text(dx.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            TextButton(onClick = onRemove) { Text("Quitar") }
+            if (canRemove) TextButton(onClick = onRemove) { Text("Quitar") }
         }
     }
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
+internal fun InfoRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
@@ -1635,7 +1790,7 @@ private fun TherapistHomeScreen(state: PrototypeState, dark: Boolean, onToggleTh
     ScreenScaffold {
         HomeHeader(
             greeting = "Hola 👋",
-            name = "José E. Patiño",
+            name = state.userName,
             dark = dark,
             onToggleTheme = onToggleTheme,
             onLogout = { state.logout() },
@@ -1644,7 +1799,7 @@ private fun TherapistHomeScreen(state: PrototypeState, dark: Boolean, onToggleTh
                     Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(Brand.Navy),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("JP", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text(state.userInitials, color = Color.White, fontWeight = FontWeight.Bold)
                 }
             },
         )
@@ -1671,21 +1826,22 @@ private fun TherapistProfileScreen(state: PrototypeState) {
                 Modifier.size(64.dp).clip(RoundedCornerShape(64.dp * 0.33f)).background(Brand.Navy),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("JP", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 22.sp)
+                Text(state.userInitials, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 22.sp)
             }
-            Text("José E. Patiño", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(state.userName, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(
-                "Terapeuta · Universidad de San Buenaventura",
+                "${state.sessionUser?.roleName.orEmpty().ifBlank { "Terapeuta" }} · Universidad de San Buenaventura",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                InfoRow("Rol", state.sessionUser?.roleName.orEmpty().ifBlank { "Terapeuta" })
                 InfoRow("Pacientes activos", "${state.patients.size}")
-                InfoRow("Autenticación", "2FA activada ✓")
             }
         }
+        SecuritySettingsCard(state)
         OutlinedCard(Modifier.fillMaxWidth()) {
             Text(
                 "Los datos clínicos de tus pacientes son información sensible. Solo tú y cada paciente asignado " +
@@ -1701,7 +1857,7 @@ private fun TherapistProfileScreen(state: PrototypeState) {
 }
 
 @Composable
-private fun PatientRow(p: Patient, onClick: () -> Unit) {
+internal fun PatientRow(p: Patient, onClick: () -> Unit) {
     val pending = p.tasks.count { it.status == TaskStatus.PENDIENTE }
     OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -1735,73 +1891,6 @@ private fun PatientRow(p: Patient, onClick: () -> Unit) {
 /* ----------------------------- administrador ----------------------------- */
 
 @Composable
-private fun AdminHomeScreen(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit) {
-    val patients = state.patients
-    val totalPending = patients.sumOf { p -> p.tasks.count { it.status == TaskStatus.PENDIENTE } }
-    ScreenScaffold {
-        HomeHeader(
-            greeting = "Hola 👋",
-            name = "Administrador",
-            dark = dark,
-            onToggleTheme = onToggleTheme,
-            onLogout = { state.logout() },
-            avatar = {
-                Box(
-                    Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(Brand.Orange),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("AD", color = Color.White, fontWeight = FontWeight.Bold)
-                }
-            },
-        )
-        Text(
-            "Panel del sistema · ${state.roleProfiles.size} perfiles configurados · $totalPending tareas pendientes.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            StatTile("${patients.size}", "pacientes activos", MaterialTheme.colorScheme.primary)
-            StatTile("${state.roleProfiles.size}", "perfiles del sistema", MaterialTheme.colorScheme.onSurface)
-        }
-        SectionLabel("Perfiles y permisos")
-        state.roleProfiles.forEach { profile -> RoleProfileCard(profile) }
-        SectionLabel("Pacientes en el sistema")
-        // El administrador hereda la ficha del terapeuta: mismo permiso de lectura sobre el caso.
-        patients.forEach { p -> PatientRow(p) { state.openPatient(p.id) } }
-        Spacer(Modifier.height(24.dp))
-    }
-}
-
-@Composable
-private fun RoleProfileCard(profile: RoleProfile) {
-    OutlinedCard(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.padding(13.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Box(
-                Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(Color(profile.badgeColor)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(profile.displayName.first().uppercase(), color = Color.White, fontWeight = FontWeight.Bold)
-            }
-            Column(Modifier.weight(1f)) {
-                Text(profile.displayName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Text(
-                    profile.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Pill("${profile.tabs.size} tabs", MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
 private fun TherapistPatientScreen(state: PrototypeState) {
     val p = state.activePatient()
     ScreenScaffold {
@@ -1827,7 +1916,7 @@ private fun TherapistPatientScreen(state: PrototypeState) {
         // esta vista se mantenga enfocada en las conductas del caso.
         OutlinedButton(onClick = { state.screen = Screen.THERAPIST_PATIENT_INFO }, Modifier.fillMaxWidth()) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(if (p.diagnoses.isEmpty()) "Asignar diagnóstico (CIE-10)" else "Gestionar datos del paciente")
+                Text(if (!state.canEditCases) "Ver datos del paciente" else if (p.diagnoses.isEmpty()) "Asignar diagnóstico (CIE-10)" else "Gestionar datos del paciente")
                 NavGlyph("forward", selected = false)
             }
         }
@@ -1898,9 +1987,9 @@ private fun TherapistPatientInfoScreen(state: PrototypeState) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            p.diagnoses.forEach { dx -> DiagnosisRow(dx) { state.removeDiagnosis(p.id, dx.code) } }
+            p.diagnoses.forEach { dx -> DiagnosisRow(dx, canRemove = state.canEditCases) { state.removeDiagnosis(p.id, dx.code) } }
         }
-        DropdownField(
+        if (state.canEditCases) DropdownField(
             label = "Agregar diagnóstico",
             selectedLabel = null,
             placeholder = if (p.diagnoses.isEmpty()) "Selecciona un código CIE-10" else "Agregar otro código",
@@ -1914,6 +2003,9 @@ private fun TherapistPatientInfoScreen(state: PrototypeState) {
                 }
             },
         )
+        state.diagnosisError?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
         if (state.showNewDiagnosisForm) {
             OutlinedTextField(
                 state.draftDiagnosisCode, { state.draftDiagnosisCode = it }, Modifier.fillMaxWidth(),
@@ -1923,13 +2015,9 @@ private fun TherapistPatientInfoScreen(state: PrototypeState) {
                 state.draftDiagnosisLabel, { state.draftDiagnosisLabel = it }, Modifier.fillMaxWidth(),
                 placeholder = { Text("Descripción del diagnóstico") }, singleLine = true,
             )
-            Button(onClick = {
-                if (state.assignDiagnosis(p.id, state.draftDiagnosisCode, state.draftDiagnosisLabel)) {
-                    state.showNewDiagnosisForm = false
-                    state.draftDiagnosisCode = ""
-                    state.draftDiagnosisLabel = ""
-                }
-            }) { Text("Guardar diagnóstico") }
+            Button(onClick = { state.assignDiagnosis(p.id, state.draftDiagnosisCode, state.draftDiagnosisLabel) }) {
+                Text("Guardar diagnóstico")
+            }
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -2021,7 +2109,7 @@ private fun TherapistBehaviorScreen(state: PrototypeState) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (behavior.baselineOpen) {
+        if (behavior.baselineOpen && state.canEditCases) {
             OutlinedButton(onClick = { state.closeBaseline(behavior.id) }, Modifier.fillMaxWidth()) {
                 Text("Cerrar línea base")
             }
@@ -2289,14 +2377,7 @@ private fun TherapistNewBehaviorScreen(state: PrototypeState) {
                         state.draftNewFunctionLabel, { state.draftNewFunctionLabel = it }, Modifier.fillMaxWidth(),
                         placeholder = { Text("Nombre de la función (ej.: Autorregulación)") }, singleLine = true,
                     )
-                    Button(onClick = {
-                        val id = state.createBehavioralFunction(state.draftNewFunctionLabel)
-                        if (id != null) {
-                            state.draftBehavioralFunctionId = id
-                            state.showNewFunctionForm = false
-                            state.draftNewFunctionLabel = ""
-                        }
-                    }) { Text("Guardar función") }
+                    Button(onClick = { state.createBehavioralFunction(state.draftNewFunctionLabel) }) { Text("Guardar función") }
                 }
             }
             val replacementOptions = state.adaptiveBehaviorsFor(state.draftPatientId)
@@ -2480,7 +2561,8 @@ private fun TherapistNewTaskScreen(state: PrototypeState) {
 @Composable
 private fun TherapistAssignedScreen(state: PrototypeState) {
     val p = state.patient(state.draftPatientId)
-    val t = p.tasks.last()
+    val t = state.lastAssignedTask() ?: return
+    val behaviorName = state.behavior(t.behaviorId).name
     val s = LocalUsBrainSemantic.current
     ScreenScaffold {
         Spacer(Modifier.height(8.dp))
@@ -2493,7 +2575,7 @@ private fun TherapistAssignedScreen(state: PrototypeState) {
             textAlign = TextAlign.Center,
         )
         Text(
-            "Se agregó a la lista de ${p.name} y recibirá una notificación.",
+            "Se agregó a la lista de ${p.name}.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth(),
@@ -2519,7 +2601,7 @@ private fun TherapistAssignedScreen(state: PrototypeState) {
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 SectionLabel("Resumen de la asignación")
-                Text("Conducta: ${p.behavior}", style = MaterialTheme.typography.bodySmall)
+                Text("Conducta: $behaviorName", style = MaterialTheme.typography.bodySmall)
                 val measure = when {
                     t.widgetConfig != null -> t.widgetConfig.name + (t.widgetConfig.unit?.let { " ($it)" } ?: "")
                     t.taskType == TaskType.REGISTRO_AUTONOMO -> "${t.dimension.label} (${t.dimension.unit})"
