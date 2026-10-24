@@ -2,7 +2,8 @@
 
 package org.usbrain.project.data
 
-actual val defaultApiBaseUrl: String = "http://localhost:8080/ords/usbrain/v1"
+// usbrain.web.apiBaseUrl en local.properties si tu ORDS no está en el puerto 8080.
+actual val defaultApiBaseUrl: String = ApiConfig.WEB_BASE_URL ?: "http://localhost:8080/ords/usbrain/v1"
 
 // En el navegador no hay un almacén equivalente al Keystore/Keychain: el refresh token
 // va en sessionStorage (dura lo que la pestaña) para limitar su exposición.

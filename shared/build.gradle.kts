@@ -13,20 +13,24 @@ plugins {
 // URL de la API para un teléfono físico, leída de local.properties (no se versiona):
 //   usbrain.android.apiBaseUrl=http://<IP del Mac>:8080/ords/usbrain/v1
 //   usbrain.ios.apiBaseUrl=http://<nombre-del-Mac>.local:8080/ords/usbrain/v1
-// Sin esas líneas se usan las del emulador (10.0.2.2) y el simulador (localhost).
+//   usbrain.web.apiBaseUrl=http://localhost:8080/ords/usbrain/v1   (si tu ORDS usa otro puerto)
+// Sin esas líneas se usan las del emulador (10.0.2.2) y el simulador / navegador (localhost:8080).
 val localProperties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
 val androidApiBaseUrl: String = localProperties.getProperty("usbrain.android.apiBaseUrl").orEmpty().trim()
 val iosApiBaseUrl: String = localProperties.getProperty("usbrain.ios.apiBaseUrl").orEmpty().trim()
+val webApiBaseUrl: String = localProperties.getProperty("usbrain.web.apiBaseUrl").orEmpty().trim()
 val generateApiConfig by tasks.registering {
     val outputDir = layout.buildDirectory.dir("generated/usbrain/kotlin")
     // Copias locales: la acción no puede referenciar el script (caché de configuración).
     val androidUrl = androidApiBaseUrl
     val iosUrl = iosApiBaseUrl
+    val webUrl = webApiBaseUrl
     inputs.property("androidApiBaseUrl", androidUrl)
     inputs.property("iosApiBaseUrl", iosUrl)
+    inputs.property("webApiBaseUrl", webUrl)
     outputs.dir(outputDir)
     doLast {
         fun literal(value: String) = if (value.isEmpty()) "null" else "\"$value\""
@@ -40,6 +44,7 @@ val generateApiConfig by tasks.registering {
             |internal object ApiConfig {
             |    val ANDROID_BASE_URL: String? = ${literal(androidUrl)}
             |    val IOS_BASE_URL: String? = ${literal(iosUrl)}
+            |    val WEB_BASE_URL: String? = ${literal(webUrl)}
             |}
             |""".trimMargin(),
         )

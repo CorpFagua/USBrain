@@ -15,6 +15,8 @@ Database Free 26ai + APEX que corre en Docker (`oracle-db` y `ords`).
 
 ## Instalación
 
+Paso a paso para un equipo nuevo (con Docker o con un Oracle/APEX propio): [INSTALACION.md](../INSTALACION.md).
+
 ```bash
 docker start oracle-db ords          # si no están corriendo
 backend/scripts/install.sh --seed    # esquema, paquetes, API, usuarios y casos de demostración

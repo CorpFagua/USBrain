@@ -3,7 +3,9 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import pathlib
+import shlex
 import struct
 import subprocess
 import sys
@@ -12,11 +14,15 @@ import urllib.error
 import urllib.request
 
 BACKEND = pathlib.Path(__file__).resolve().parent.parent
-ENV = dict(
-    line.split("=", 1)
-    for line in (BACKEND / ".env").read_text().splitlines()
-    if line and not line.startswith("#") and "=" in line
-)
+# Mismo archivo que lee install.sh (bash): KEY=valor, con comillas opcionales.
+ENV = {
+    key: value.strip().strip('"').strip("'")
+    for key, value in (
+        line.split("=", 1)
+        for line in pathlib.Path(os.environ.get("USBRAIN_ENV", BACKEND / ".env")).read_text().splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+}
 API = ENV["API_BASE"]
 PASSWORD = ENV["DEV_SEED_PASSWORD"]
 
@@ -54,15 +60,20 @@ def call(method, path, body=None, token=None):
 
 def sql(statement):
     """Ejecuta PL/SQL como USBRAIN dentro del contenedor (credenciales por stdin)."""
+    # Mismo modo de conexión que install.sh: dentro del contenedor o con SQLcl/sqlplus local.
+    service = ENV.get("ORACLE_SERVICE") or "FREEPDB1"
+    if ENV.get("ORACLE_MODE", "docker") == "local":
+        target = f'//{ENV.get("DB_HOST") or "localhost"}:{ENV.get("DB_PORT") or "1521"}/{service}'
+        command = shlex.split(ENV.get("SQL_CLIENT") or "sql") + ["-S", "/nolog"]
+    else:
+        target = f"//localhost:1521/{service}"
+        command = ["docker", "exec", "-i", ENV.get("ORACLE_CONTAINER") or "oracle-db", "sqlplus", "-s", "-l", "/nolog"]
     script = (
-        f'connect usbrain/"{ENV["USBRAIN_DB_PASSWORD"]}"@//localhost:1521/{ENV["ORACLE_SERVICE"]}\n'
+        f'connect usbrain/"{ENV["USBRAIN_DB_PASSWORD"]}"@{target}\n'
         "whenever sqlerror exit failure\n"
         f"begin {statement} commit; end;\n/\nexit\n"
     )
-    result = subprocess.run(
-        ["docker", "exec", "-i", ENV["ORACLE_CONTAINER"], "sqlplus", "-s", "-l", "/nolog"],
-        input=script.encode(), capture_output=True,
-    )
+    result = subprocess.run(command, input=script.encode(), capture_output=True)
     if result.returncode != 0:
         raise RuntimeError("Falló el SQL de preparación:\n" + result.stdout.decode(errors="replace"))
 

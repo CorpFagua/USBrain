@@ -169,6 +169,9 @@ conducta se puede leer sin confundir una sesión más larga con un empeoramiento
 
 ## Cómo ejecutar
 
+> **¿Primera vez?** Sigue la [guía de instalación](INSTALACION.md): cubre desde cero con Docker y
+> también si ya tienes Oracle/APEX instalado.
+
 Primero el backend (una vez por sesión de trabajo):
 
 ```bash
