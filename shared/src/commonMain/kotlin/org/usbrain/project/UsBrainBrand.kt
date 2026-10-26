@@ -183,6 +183,27 @@ fun NavGlyph(kind: String, selected: Boolean) {
             "forward" -> drawPath(Path().apply {
                 moveTo(w * 0.38f, h * 0.20f); lineTo(w * 0.66f, h * 0.5f); lineTo(w * 0.38f, h * 0.80f)
             }, tint, style = stroke)
+            // Dos personas: pestaña de "Usuarios" del administrador.
+            "users" -> {
+                drawCircle(tint, radius = w * 0.12f, center = Offset(w * 0.38f, h * 0.34f), style = stroke)
+                drawPath(Path().apply {
+                    moveTo(w * 0.12f, h * 0.84f)
+                    quadraticTo(w * 0.38f, h * 0.54f, w * 0.64f, h * 0.84f)
+                }, tint, style = stroke)
+                drawCircle(tint, radius = w * 0.10f, center = Offset(w * 0.68f, h * 0.30f), style = stroke)
+                drawPath(Path().apply {
+                    moveTo(w * 0.64f, h * 0.56f)
+                    quadraticTo(w * 0.82f, h * 0.58f, w * 0.90f, h * 0.76f)
+                }, tint, style = stroke)
+            }
+            // Escudo: pestaña de "Roles y permisos".
+            "shield" -> drawPath(Path().apply {
+                moveTo(w * 0.50f, h * 0.12f); lineTo(w * 0.82f, h * 0.24f); lineTo(w * 0.80f, h * 0.52f)
+                quadraticTo(w * 0.74f, h * 0.76f, w * 0.50f, h * 0.88f)
+                quadraticTo(w * 0.26f, h * 0.76f, w * 0.20f, h * 0.52f)
+                lineTo(w * 0.18f, h * 0.24f); close()
+                moveTo(w * 0.38f, h * 0.50f); lineTo(w * 0.48f, h * 0.60f); lineTo(w * 0.64f, h * 0.42f)
+            }, tint, style = stroke)
             // Tres líneas horizontales: pestaña de "Historial"/lista, distinta de "chart" (que
             // ya se usa para la gráfica de progreso).
             "list" -> {

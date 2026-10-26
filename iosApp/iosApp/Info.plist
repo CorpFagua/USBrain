@@ -4,5 +4,17 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- iOS 14+ pide permiso para hablar con equipos de la red local (el Mac con ORDS). -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>USBrain se conecta al servidor de desarrollo en tu red local.</string>
+	<!-- Permite HTTP solo hacia la red local (ORDS en Docker durante el desarrollo). -->
+	<!-- Texto que iOS muestra al pedir Face ID para desbloquear la app. -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>Usa Face ID para desbloquear USBrain sin escribir tu PIN.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

@@ -9,14 +9,15 @@ Proyecto Kotlin Multiplatform (Android + iOS + **Web**) con UI compartida en Com
 
 ## Prototipo interactivo (entrega para el asesor)
 
-Está implementado un **prototipo navegable** de los flujos principales, dentro de la misma app KMP
-(`shared/src/commonMain`). No tiene backend: todo el estado vive en memoria y se reinicia desde el menú.
+Los flujos principales están implementados en la misma app KMP (`shared/src/commonMain`) y
+funcionan **contra la base de datos real** (Oracle + ORDS en Docker, ver [`backend/`](backend/README.md)):
+login con 2FA, sesión persistente y todos los datos clínicos se leen y guardan en el servidor.
 
 ### Qué se puede probar
 
 | Flujo | Pantallas |
 |---|---|
-| **Inicio de sesión (2 roles)** | Un login único → se elige **Paciente** o **Terapeuta** (credenciales autocompletadas) → **verificación 2FA** (código `304 917` precargado) → home del rol |
+| **Inicio de sesión** | Correo y contraseña → **2FA con app autenticadora** (la primera vez se escanea un QR y se entregan 10 códigos de recuperación) → home según el rol de la cuenta. Al reabrir la app, la sesión se restaura sola |
 | **Home del paciente** | Saludo, racha, registros de la semana, tareas agrupadas por conducta, clasificación de conductas (adaptativas/desadaptativas) y gráficas de progreso |
 | **El paciente llena una tarea** | Se abren las indicaciones del terapeuta → el formulario cambia según la dimensión: **frecuencia** = episodios y minutos observados, **intensidad** = escala 0–10, **duración** = minutos → nota opcional → *Guardar registro* → confirmación y el punto nuevo aparece en la gráfica de la conducta |
 | **Home del terapeuta** | Cartera de pacientes con casos, conductas y tareas pendientes; detalle del caso con conductas, estado de línea base y progreso |
@@ -28,23 +29,42 @@ Está implementado un **prototipo navegable** de los flujos principales, dentro 
 
 ### Datos de prueba
 
+Se cargan con `backend/scripts/install.sh --seed`. Contraseña de todos: `DEV_SEED_PASSWORD` en
+`backend/.env`. El primer ingreso de cada cuenta pide enrolar Google o Microsoft Authenticator.
+
+- Terapeuta: `e.patino@usb.edu.co` — José E. Patiño (tiene asignados a Ana y Daniel).
 - Paciente: `ana.torres@usbbog.edu.co` — Ana Torres, ansiedad social, caso único con conductas adaptativas y desadaptativas.
-- Terapeuta: `e.patino@usb.edu.co` — José E. Patiño.
-- Contraseña: cualquiera (precargada) · Código 2FA: `304 917` (precargado).
-- Segundo paciente de ejemplo: Daniel Ruiz, insomnio de conciliación, con línea base abierta.
+- Paciente: `daniel.ruiz@usbbog.edu.co` — Daniel Ruiz, insomnio de conciliación, con línea base abierta.
+- Paciente de estudio longitudinal: `laura.mendoza@usbbog.edu.co` — Laura Mendoza, caso ficticio
+  de hábitos de sueño con 3 meses de seguimiento, 2 conductas, 91 registros clásicos y 77
+  mediciones configurables. Solo este perfil utiliza el panel de gráficas por mes y la vista
+  global con promedios semanales.
+- Administrador: `admin@usb.edu.co` — gestiona usuarios; ve todos los casos y la bitácora.
+- Super administrador: `superadmin@usb.edu.co` — además crea y edita roles y permisos.
+
+Tras el 2FA, en Android e iOS se crea un PIN de 6 dígitos (y, si quieres, se activa la huella o el
+rostro). La app lo pide cada vez que se abre. En el login está "¿Olvidaste tu contraseña?".
 
 ### Menú (arriba a la derecha)
 
-- **Ir a sesión paciente / terapeuta** — salta el login para revisar rápido.
 - **Tema claro / oscuro** — alterna el tema (por defecto sigue el del sistema).
-- **Reiniciar demo** — vuelve al estado inicial.
-- **Cerrar sesión** — regresa al login.
+- **Cerrar sesión** — cierra la sesión en el servidor y borra la guardada en el dispositivo.
+
+En la vista previa "como paciente" del terapeuta aparece una franja para volver a su vista; es de
+solo lectura (el servidor no deja que el terapeuta registre por el paciente).
 
 ### Recorrido sugerido para la sustentación
 
-**Terapeuta:** Ir a sesión terapeuta → seleccionar consultante → *Nueva conducta* (crear una adaptativa y otra desadaptativa) → guardar → revisar línea base (observaciones) → *Cerrar línea base* → *Nueva tarea* (verá que la fase cambió automáticamente a intervención) → asignar → ver previsualización → *Previsualizar como paciente* → llenar esa tarea → *Ver progreso* (muestra conductas separadas por clasificación, con línea base como zona fija).
+**Terapeuta:** iniciar sesión como `e.patino@usb.edu.co` → seleccionar consultante → *Nueva conducta* (crear una adaptativa y otra desadaptativa) → guardar → revisar línea base (observaciones) → *Cerrar línea base* → *Nueva tarea* (verá que la fase cambió automáticamente a intervención) → asignar → ver previsualización → *Previsualizar como paciente* → llenar esa tarea → *Ver progreso* (muestra conductas separadas por clasificación, con línea base como zona fija).
 
 **Resultado:** Las gráficas de progreso mostrarán conductas adaptativas y desadaptativas por separado, la línea base aparecerá como una zona o referencia fija con su contador de observaciones, y los registros de intervención se graficarán en el eje temporal sin contaminar la línea base cerrada.
+
+---
+
+## Backend (autenticación)
+
+Login con contraseña + 2FA (TOTP) y sesiones persistentes por dispositivo sobre Oracle + ORDS en
+Docker. Instalación, contrato de la API y modelo de seguridad en [`backend/README.md`](backend/README.md).
 
 ---
 
@@ -139,7 +159,11 @@ conducta se puede leer sin confundir una sesión más larga con un empeoramiento
 |---|---|
 | `Theme.kt` | `UsBrainTheme` — esquemas de color claro/oscuro derivados de la paleta, formas, colores semánticos (éxito, fases, grilla) vía `LocalUsBrainSemantic` |
 | `UsBrainBrand.kt` | Marca (`UsBrainMark`, `UsBrainMarkVector`, `UsBrainWordmark`, `UsBrainLockup`), `SuccessBadge`, íconos de navegación dibujados (`NavGlyph`) |
-| `PrototypeModel.kt` | Modelo en memoria: `Role`, `Dimension`, `Phase`, `TaskStatus`, `Patient`, `TrackTask`, `PrototypeState` (máquina de estados + datos de ejemplo) |
+| `PrototypeModel.kt` | Modelo (`Role`, `Dimension`, `Phase`, `Patient`, `Behavior`, `TrackTask`…) y `PrototypeState`: navegación, sesión y acciones, que llaman a la API y recargan los datos |
+| `DataMapping.kt` | Convierte el JSON del bootstrap del servidor en el modelo de las pantallas |
+| `data/UsBrainApi.kt` | Cliente HTTP (Ktor): login, 2FA, refresh automático y endpoints clínicos |
+| `data/ApiModels.kt` | Contrato JSON de la API |
+| `data/SecureStorage.kt` | Sesión guardada: Keystore (Android), Keychain (iOS), `sessionStorage` (web) |
 | `PrototypeApp.kt` | Todas las pantallas, la barra superior, la barra de navegación y la gráfica de tendencia (`Canvas`) |
 | `App.kt` | Punto de entrada: tema + `remember` del estado + `PrototypeApp` |
 
@@ -148,6 +172,25 @@ conducta se puede leer sin confundir una sesión más larga con un empeoramiento
 ---
 
 ## Cómo ejecutar
+
+> **¿Primera vez?** Sigue la [guía de instalación](INSTALACION.md): cubre desde cero con Docker y
+> también si ya tienes Oracle/APEX instalado.
+
+Primero el backend (una vez por sesión de trabajo):
+
+```bash
+docker start oracle-db ords
+backend/scripts/install.sh --seed
+```
+
+En Windows, si WSL muestra `Bash/Service/WSAETIMEDOUT`, no es un fallo del esquema ni de
+Oracle. Reinicia WSL y Docker Desktop antes de repetir el instalador. La semilla es idempotente:
+puede ejecutarse nuevamente sin duplicar el caso longitudinal. No se debe editar la base de
+datos manualmente para recrear la demo; su definición permanente está en
+[`backend/sql/90_seed_dev.sql`](backend/sql/90_seed_dev.sql).
+
+La app usa `http://10.0.2.2:8080` en el emulador de Android y `http://localhost:8080` en el
+simulador de iOS y en la web. En un teléfono físico, cambia `defaultApiBaseUrl` por la IP del computador.
 
 ### Ejemplos incluidos en la demo
 
@@ -178,7 +221,8 @@ o compilar la app KMP con la tarea `:shared:embedAndSignAppleFrameworkForXcode`.
 ./gradlew :shared:wasmJsBrowserDevelopmentRun
 ```
 
-Levanta un servidor de desarrollo (con recarga en caliente) en `http://localhost:8080`.
+Levanta un servidor de desarrollo (con recarga en caliente) en `http://localhost:8081`
+(el 8080 lo ocupa ORDS). Es el único origen que la API acepta desde el navegador (CORS).
 Requiere un navegador reciente con soporte de WebAssembly GC (Chrome/Edge 119+, Firefox 120+, Safari 18.2+).
 
 Para generar los archivos estáticos listos para publicar (por ejemplo en GitHub Pages, Netlify o cualquier
@@ -200,6 +244,63 @@ Es el mismo `App()` que corre en Android e iOS — no hay una versión de UI apa
 ./gradlew :shared:testAndroidHostTest
 ./gradlew :shared:iosSimulatorArm64Test
 ```
+
+## Notas de integración para el PR de `oracle2`
+
+Esta sección registra los cambios de la rama para que puedan integrarse con otras ramas sin
+depender del estado local de Docker, VS Code o una base de datos ya modificada.
+
+### Cambios incluidos
+
+| Área | Archivos principales | Resultado |
+|---|---|---|
+| Semilla reproducible | `backend/sql/90_seed_dev.sql`, `backend/scripts/install.sh` | Restaura las credenciales de desarrollo, reinicia el enrolamiento 2FA y crea el caso ficticio de Laura con tres meses de datos |
+| Seguridad administrativa | `backend/sql/10_usb_admin.sql` | Un administrador normal no puede crear superadministradores; únicamente otro superadministrador puede hacerlo |
+| Interfaz compartida | `shared/src/commonMain/kotlin/org/usbrain/project/PrototypeApp.kt` | Calendario de nacimiento, gráficas legibles y panel mensual/global exclusivo del perfil de Laura |
+| Normalización de texto | `shared/src/commonMain/kotlin/org/usbrain/project/DataMapping.kt` | Evita mostrar caracteres de sustitución provenientes de datos históricos dañados |
+| Roles en formularios | `shared/src/commonMain/kotlin/org/usbrain/project/AdminScreens.kt` | La opción de superadministrador se oculta cuando el usuario conectado no tiene ese rol |
+| Pruebas | `shared/src/androidHostTest/kotlin/org/usbrain/project/LiveApiIntegrationTest.kt` | Cada prueba limpia PIN y refresh token para no depender del orden de ejecución |
+| Compatibilidad de scripts | `.gitattributes`, `gradlew`, scripts de `backend/` | Fuerza finales de línea LF donde Bash los necesita y evita errores al colaborar desde Windows |
+
+Las gráficas normales de Ana, Daniel y cualquier paciente nuevo conservan la visualización por
+días de la semana. El selector mensual, el resumen semanal y la vista global se activan solamente
+para el caso titulado `Estudio longitudinal de habitos de sueno (3 meses)` de Laura Mendoza.
+
+### Comprobación antes de abrir o actualizar el PR
+
+```bash
+git fetch origin
+git status
+git diff --check
+./gradlew :shared:compileKotlinWasmJs :androidApp:assembleDebug
+python backend/tests/auth_e2e.py
+python backend/tests/app_e2e.py
+python backend/tests/admin_e2e.py
+```
+
+Antes de sincronizar con la rama destino, guarda o confirma tus cambios y actualiza la rama sin
+forzar el historial. Si el equipo usa rebase:
+
+```bash
+git fetch origin
+git rebase origin/<rama-destino>
+```
+
+Si el equipo prefiere merge, sustituye el último comando por `git merge origin/<rama-destino>`.
+No combines ambos métodos en la misma actualización y respeta la convención acordada por el
+equipo. Si hay conflictos, revisa especialmente `PrototypeApp.kt` y los archivos SQL; no aceptes
+automáticamente una versión completa porque podría eliminar cambios de otra persona.
+
+### Archivos que no deben entrar al PR
+
+- `backend/.env`: contiene credenciales locales y ya está ignorado.
+- `local.properties`, `.gradle/`, `.kotlin/`, `**/build/` y APK generados.
+- `.vscode-respaldo/`: es una copia local ajena a la aplicación y no forma parte de estos cambios.
+- Volúmenes o datos internos de Docker: el estado reproducible debe provenir de los scripts SQL.
+
+Después de integrar el PR, cada compañero debe aplicar el backend con `--seed`, recompilar su
+plataforma y volver a iniciar sesión. La primera autenticación solicita enrolar 2FA porque la
+semilla lo reinicia deliberadamente para las cuentas de demostración.
 
 ---
 

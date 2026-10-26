@@ -14,6 +14,8 @@ dependencies {
     implementation(project(":shared"))
 
     implementation(libs.androidx.activity.compose)
+    // FragmentActivity + BiometricPrompt (desbloqueo con huella o rostro).
+    implementation(libs.androidx.biometric)
 
     implementation(libs.compose.uiToolingPreview)
     debugImplementation(libs.compose.uiTooling)

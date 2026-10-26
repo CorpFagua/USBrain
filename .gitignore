@@ -6,6 +6,7 @@ xcuserdata
 !src/**/build/
 local.properties
 .idea
+.vscode-respaldo/
 .DS_Store
 captures
 .externalNativeBuild
@@ -17,3 +18,10 @@ captures
 !*.xcworkspace/contents.xcworkspacedata
 **/xcshareddata/WorkspaceSettings.xcsettings
 node_modules/
+
+# Backend: credenciales locales
+backend/.env
+__pycache__/
+# APEX descomprimido para docker-compose (opcional, ~250 MB)
+backend/apex/*
+!backend/apex/LEEME.md

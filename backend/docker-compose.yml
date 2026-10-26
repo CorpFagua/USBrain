@@ -1,0 +1,47 @@
+# USBrain · base de datos (Oracle AI Database 26ai Free) + ORDS, listos para la app.
+#
+#   cd backend
+#   cp .env.example .env        # y pon ORACLE_PWD (ver INSTALACION.md)
+#   docker compose up -d        # la primera vez tarda 5–15 min
+#
+# APEX es opcional: si descomprimes APEX en backend/apex/, ORDS lo instala en la base.
+# Los nombres de contenedor y los puertos se pueden cambiar en backend/.env.
+name: usbrain
+
+services:
+  oracle-db:
+    image: container-registry.oracle.com/database/free:latest
+    container_name: ${ORACLE_CONTAINER:-oracle-db}
+    environment:
+      # Contraseña de SYS/SYSTEM/PDBADMIN. Mínimo 8 caracteres con mayúscula, minúscula y número.
+      ORACLE_PWD: ${ORACLE_PWD:?Define ORACLE_PWD en backend/.env}
+    ports:
+      - "${DB_PORT:-1521}:1521"
+    volumes:
+      - oradata:/opt/oracle/oradata
+    # La imagen trae su propio healthcheck: "healthy" = la base está lista.
+
+  ords:
+    image: container-registry.oracle.com/database/ords:latest
+    container_name: ${ORDS_CONTAINER:-ords}
+    depends_on:
+      oracle-db:
+        condition: service_healthy
+    environment:
+      DBHOST: oracle-db
+      DBPORT: "1521"
+      DBSERVICENAME: ${ORACLE_SERVICE:-FREEPDB1}
+      ORACLE_PWD: ${ORACLE_PWD}
+      # Contraseña de los usuarios internos de ORDS (ORDS_PUBLIC_USER…). La imagen la exige.
+      ORACLE_USER_PWD: ${ORACLE_PWD}
+    ports:
+      - "${ORDS_PORT:-8080}:8080"
+    volumes:
+      - ords-config:/etc/ords/config
+      # Opcional: APEX descomprimido aquí (backend/apex/images, apexins.sql…). Si la carpeta
+      # está vacía, ORDS se instala sin APEX y la API de la app funciona igual.
+      - ./apex:/opt/oracle/apex
+
+volumes:
+  oradata:
+  ords-config:
