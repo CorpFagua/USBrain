@@ -13,6 +13,7 @@ set define off feedback off
 create or replace package usb_api authid definer as
 
   procedure login(p_body clob);
+  procedure change_initial_password(p_body clob);
   procedure verify_mfa(p_body clob);
   procedure verify_recovery_code(p_body clob);
   procedure refresh(p_body clob);
@@ -150,6 +151,18 @@ create or replace package body usb_api as
   exception
     when others then handle_error('POST /auth/login');
   end login;
+
+  procedure change_initial_password(p_body clob) is
+    l_req json_object_t;
+  begin
+    start_request;
+    l_req := parse(p_body);
+    respond_ok(usb_auth.change_initial_password(l_req.get_string('challenge_id'),
+                                                l_req.get_string('current_password'),
+                                                l_req.get_string('new_password')));
+  exception
+    when others then handle_error('POST /auth/password/first-login');
+  end change_initial_password;
 
   procedure verify_mfa(p_body clob) is
     l_req json_object_t;

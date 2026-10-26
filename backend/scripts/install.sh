@@ -6,12 +6,17 @@
 # Funciona con los contenedores de docker-compose.yml (ORACLE_MODE=docker) o con un
 # Oracle/ORDS/APEX que ya tengas instalado (ORACLE_MODE=local). Ver INSTALACION.md.
 set -euo pipefail
+trap 'status=$?; printf "Error: install.sh failed at line %s (exit %s).\n" "$LINENO" "$status" >&2' ERR
 
 BACKEND_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="${USBRAIN_ENV:-$BACKEND_DIR/.env}"
 SQL_DIR="$BACKEND_DIR/sql"
 
-random_password() { echo "U$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 23)"; }
+random_password() {
+  local length="${1:-23}" value
+  value="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9')"
+  printf 'U%.*s' "$length" "$value"
+}
 
 # Escribe (o reemplaza) KEY=valor en el .env.
 set_env() {
@@ -36,7 +41,7 @@ if [[ -z "${USBRAIN_DB_PASSWORD:-}" ]]; then
   USBRAIN_DB_PASSWORD="$(random_password)"; set_env USBRAIN_DB_PASSWORD "$USBRAIN_DB_PASSWORD"
 fi
 if [[ -z "${DEV_SEED_PASSWORD:-}" ]]; then
-  DEV_SEED_PASSWORD="Dev-$(random_password | head -c 12)!"; set_env DEV_SEED_PASSWORD "$DEV_SEED_PASSWORD"
+  DEV_SEED_PASSWORD="Dev-$(random_password 11)!"; set_env DEV_SEED_PASSWORD "$DEV_SEED_PASSWORD"
 fi
 
 ORACLE_MODE="${ORACLE_MODE:-docker}"
@@ -54,7 +59,7 @@ if [[ "$ORACLE_MODE" == "docker" ]]; then
   # Dentro del contenedor la base está en su propio localhost.
   CONNECT_STRING="//localhost:1521/$ORACLE_SERVICE"
   [[ -z "$SYS_PWD" ]] && SYS_PWD="$(docker exec "$ORACLE_CONTAINER" printenv ORACLE_PWD 2>/dev/null || true)"
-  sql_client() { docker exec -i -e NLS_LANG=AMERICAN_AMERICA.AL32UTF8 "$ORACLE_CONTAINER" sqlplus -s -l /nolog; }
+  sql_client() { MSYS_NO_PATHCONV=1 docker exec -i -e NLS_LANG=AMERICAN_AMERICA.AL32UTF8 "$ORACLE_CONTAINER" sqlplus -s -L /nolog; }
 elif [[ "$ORACLE_MODE" == "local" ]]; then
   CONNECT_STRING="//${DB_HOST:-localhost}:${DB_PORT:-1521}/$ORACLE_SERVICE"
   SQL_CLIENT="${SQL_CLIENT:-sql}"

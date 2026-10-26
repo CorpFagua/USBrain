@@ -77,6 +77,21 @@ class UsBrainApi(
             }
         }
 
+    suspend fun changeInitialPassword(
+        challengeId: String,
+        currentPassword: String,
+        newPassword: String,
+    ): LoginResponse =
+        send<LoginResponse> {
+            post(url("auth/password/first-login")) {
+                json(buildJsonObject {
+                    put("challenge_id", challengeId)
+                    put("current_password", currentPassword)
+                    put("new_password", newPassword)
+                })
+            }
+        }
+
     suspend fun verifyMfa(challengeId: String, code: String): TokenResponse =
         send<TokenResponse> {
             post(url("auth/mfa/verify")) {

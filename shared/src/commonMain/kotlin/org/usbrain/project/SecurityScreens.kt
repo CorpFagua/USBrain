@@ -28,6 +28,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,16 +40,120 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.usbrain.project.security.AppLock
 import org.usbrain.project.security.supportsAppLock
 
+/* ------------------------- contraseña temporal ------------------------- */
+
+@Composable
+internal fun FirstPasswordChangeScreen(state: PrototypeState) {
+    var passwordVisible by remember { mutableStateOf(false) }
+    var confirmationVisible by remember { mutableStateOf(false) }
+    val assessment = assessPassword(state.firstPassword, state.loginEmail, exactLength = true)
+    val isSameAsTemporary = state.firstPassword.isNotEmpty() && state.firstPassword == state.loginPassword
+    ScreenScaffold {
+        BackHeader("Crea una contraseña nueva") { state.cancelLogin() }
+        Text(
+            "Por seguridad, antes de configurar la verificación en dos pasos debes reemplazar la contraseña temporal.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+            state.firstPassword,
+            { state.firstPassword = it },
+            Modifier.fillMaxWidth(),
+            label = { Text("Nueva contraseña") },
+            singleLine = true,
+            isError = state.firstPassword.isNotEmpty() && (!assessment.isValid || isSameAsTemporary),
+            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            trailingIcon = {
+                PasswordVisibilityToggle(passwordVisible) { passwordVisible = !passwordVisible }
+            },
+        )
+        Text(
+            "Caracteres: ${passwordCharacterCount(state.firstPassword)}/10",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        PasswordStrengthIndicator(assessment)
+        if (state.firstPassword.isNotEmpty() && (!assessment.isValid || isSameAsTemporary)) {
+            Text(
+                if (isSameAsTemporary) "La nueva contraseña debe ser distinta de la temporal."
+                else assessment.message.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        OutlinedTextField(
+            state.firstPasswordConfirmation,
+            { state.firstPasswordConfirmation = it },
+            Modifier.fillMaxWidth(),
+            label = { Text("Confirma la nueva contraseña") },
+            singleLine = true,
+            isError = state.firstPasswordConfirmation.isNotEmpty() &&
+                state.firstPassword != state.firstPasswordConfirmation,
+            visualTransformation = if (confirmationVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            trailingIcon = {
+                PasswordVisibilityToggle(confirmationVisible) { confirmationVisible = !confirmationVisible }
+            },
+        )
+        Text(
+            "Requisitos: exactamente 10 caracteres, al menos 3 tipos de caracteres (mayúsculas, minúsculas, números y símbolos) y no incluir el nombre de usuario del correo.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        state.authError?.let { ErrorText(it) }
+        Button(
+            onClick = { state.submitFirstPasswordChange() },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !state.busy && assessment.isValid && !isSameAsTemporary &&
+                state.firstPassword == state.firstPasswordConfirmation,
+        ) {
+            Text(if (state.busy) "Actualizando…" else "Guardar y continuar a 2FA")
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+internal fun PasswordStrengthIndicator(assessment: PasswordAssessment) {
+    val strengthColor = when (assessment.score) {
+        0, 1 -> MaterialTheme.colorScheme.error
+        2 -> Brand.Orange
+        3 -> Brand.Violet
+        else -> LocalUsBrainSemantic.current.success
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            repeat(4) { index ->
+                Surface(
+                    modifier = Modifier.weight(1f).height(7.dp),
+                    color = if (index < assessment.score) strengthColor
+                    else MaterialTheme.colorScheme.surfaceVariant,
+                    shape = CircleShape,
+                ) {}
+            }
+        }
+        Text(
+            "Seguridad: ${assessment.label}",
+            style = MaterialTheme.typography.labelMedium,
+            color = strengthColor,
+        )
+    }
+}
+
 /* ----------------------------- olvido de contraseña ----------------------------- */
 
 @Composable
 internal fun ForgotPasswordScreen(state: PrototypeState) {
+    var passwordVisible by remember { mutableStateOf(false) }
+    var confirmationVisible by remember { mutableStateOf(false) }
     val resetId = state.forgotResetId
     ScreenScaffold {
         BackHeader("Recuperar contraseña") { state.screen = Screen.LOGIN }
@@ -82,18 +190,57 @@ internal fun ForgotPasswordScreen(state: PrototypeState) {
             }
             OutlinedTextField(
                 state.forgotNewPassword, { state.forgotNewPassword = it }, Modifier.fillMaxWidth(),
-                label = { Text("Nueva contraseña (mínimo 10 caracteres)") }, singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
+                label = { Text("Nueva contraseña") }, singleLine = true,
+                isError = state.forgotNewPassword.isNotEmpty() &&
+                    !assessPassword(state.forgotNewPassword, state.forgotEmail, exactLength = true).isValid,
+                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    PasswordVisibilityToggle(passwordVisible) { passwordVisible = !passwordVisible }
+                },
             )
+            val passwordAssessment = assessPassword(
+                state.forgotNewPassword,
+                state.forgotEmail,
+                exactLength = true,
+            )
+            Text(
+                "Caracteres: ${passwordCharacterCount(state.forgotNewPassword)}/10",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            PasswordStrengthIndicator(passwordAssessment)
+            if (state.forgotNewPassword.isNotEmpty() && !passwordAssessment.isValid) {
+                Text(
+                    passwordAssessment.message.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             OutlinedTextField(
                 state.forgotConfirmPassword, { state.forgotConfirmPassword = it }, Modifier.fillMaxWidth(),
                 label = { Text("Repite la nueva contraseña") }, singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
+                isError = state.forgotConfirmPassword.isNotEmpty() &&
+                    state.forgotNewPassword != state.forgotConfirmPassword,
+                visualTransformation = if (confirmationVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    PasswordVisibilityToggle(confirmationVisible) { confirmationVisible = !confirmationVisible }
+                },
+            )
+            Text(
+                "Usa exactamente 10 caracteres, combina al menos 3 tipos (mayúsculas, minúsculas, números y símbolos) y no incluyas el usuario del correo.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             state.authError?.let { ErrorText(it) }
-            Button(onClick = { state.submitResetPassword() }, Modifier.fillMaxWidth().height(50.dp), enabled = !state.busy) {
+            Button(
+                onClick = { state.submitResetPassword() },
+                Modifier.fillMaxWidth().height(50.dp),
+                enabled = !state.busy &&
+                    passwordAssessment.isValid &&
+                    state.forgotNewPassword == state.forgotConfirmPassword,
+            ) {
                 Text("Cambiar contraseña")
             }
             Text(
