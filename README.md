@@ -175,6 +175,7 @@ conducta se puede leer sin confundir una sesión más larga con un empeoramiento
 
 > **¿Primera vez?** Sigue la [guía de instalación](INSTALACION.md): cubre desde cero con Docker y
 > también si ya tienes Oracle/APEX instalado.
+> **Stage (Render + ngrok):** [STAGE.md](STAGE.md).
 
 Primero el backend (una vez por sesión de trabajo):
 
