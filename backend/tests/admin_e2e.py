@@ -98,6 +98,58 @@ status, body = call("POST", "/admin/users", {"email": CREATED_PATIENT, "full_nam
                                               "program": "Psicología", "condition": "Ansiedad"}, A)
 check(status == 200, "el admin crea un paciente con su terapeuta, ficha y caso")
 created_patient_id = body["id"]
+status, first_login = login(CREATED_THERAPIST, "e2e-first-login-000001", PASSWORD)
+check(status == 200 and first_login["status"] == "password_change_required",
+      "usuario nuevo debe cambiar la contraseña temporal antes de 2FA")
+status, body = call("POST", "/auth/mfa/verify", {
+    "challenge_id": first_login["challenge_id"],
+    "code": "123456",
+})
+check(status == 401 and body["error"] == "challenge_expired",
+      "el desafío de cambio obligatorio no permite saltarse directamente a 2FA")
+status, body = call("POST", "/auth/password/first-login", {
+    "challenge_id": first_login["challenge_id"],
+    "current_password": "clave-temporal-incorrecta",
+    "new_password": "Nueva-Clave-Segura-123",
+})
+check(status == 401 and body["error"] == "invalid_credentials",
+      "el cambio exige volver a validar la contraseña temporal")
+status, body = call("POST", "/auth/password/first-login", {
+    "challenge_id": first_login["challenge_id"],
+    "current_password": PASSWORD,
+    "new_password": "aaaaaaaaaa",
+})
+check(status == 400 and body["error"] == "weak_password",
+      "contraseña sin mezcla de caracteres rechazada antes de 2FA")
+for invalid_length_password in ("Abcdef1!X", "Abcdef1!Xyz"):
+    status, body = call("POST", "/auth/password/first-login", {
+        "challenge_id": first_login["challenge_id"],
+        "current_password": PASSWORD,
+        "new_password": invalid_length_password,
+    })
+    check(status == 400 and body["error"] == "weak_password",
+          "contraseña inicial con longitud distinta de 10 rechazada")
+new_password = "Abcdef1!X😀"
+status, changed = call("POST", "/auth/password/first-login", {
+    "challenge_id": first_login["challenge_id"],
+    "current_password": PASSWORD,
+    "new_password": new_password,
+})
+check(status == 200 and changed["status"] == "mfa_enrollment_required",
+      "contraseña temporal actualizada en la base y luego solicita enrolar 2FA")
+secret = changed["enrollment"]["secret"]
+status, enrolled = call("POST", "/auth/mfa/verify", {
+    "challenge_id": changed["challenge_id"],
+    "code": totp(secret),
+})
+check(status == 200 and enrolled["user"]["mfa_enabled"],
+      "el 2FA completa el acceso solo después de cambiar la contraseña")
+status, body = login(CREATED_THERAPIST, "e2e-first-login-000002", PASSWORD)
+check(status == 401 and body["error"] == "invalid_credentials",
+      "la contraseña temporal deja de funcionar tras el cambio")
+status, body = login(CREATED_THERAPIST, "e2e-first-login-000003", new_password)
+check(status == 200 and body["status"] == "mfa_required",
+      "la contraseña nueva permite avanzar al 2FA habitual")
 status, body = call("POST", f"/admin/users/{created_patient_id}", {"role": "THERAPIST"}, A)
 check(status == 409 and body["error"] == "profile_mismatch", "un paciente no pasa a un rol de terapeuta")
 status, body = call("POST", f"/admin/users/{created_therapist_id}/actions", {"action": "unlock"}, A)
@@ -105,6 +157,9 @@ check(status == 200, "el admin desbloquea un usuario")
 status, body = call("POST", f"/admin/users/{created_therapist_id}/actions",
                     {"action": "set_password", "password": PASSWORD + "-2"}, A)
 check(status == 200, "el admin restablece una contraseña")
+status, body = login(CREATED_THERAPIST, "e2e-reset-password-00001", PASSWORD + "-2")
+check(status == 200 and body["status"] == "password_change_required",
+      "la contraseña restablecida por administración también es temporal")
 
 print("\n4. Un rol nuevo funciona sin tocar código")
 status, body = call("POST", "/admin/users", {"email": SUPERVISOR_EMAIL, "full_name": "Supervisor E2E",
@@ -142,18 +197,30 @@ status2, known = call("POST", "/auth/password/forgot", {"email": E2E_PATIENT, "d
 check(status == status2 == 200 and unknown.keys() == known.keys() and unknown["message"] == known["message"],
       "correo existente o no: la respuesta es idéntica (no revela usuarios)")
 status, body = call("POST", "/auth/password/reset", {"reset_id": unknown["reset_id"], "code": "123456",
-                                                     "new_password": "OtraClave-Segura-1"})
+                                                     "new_password": "Nueva1!Abc"})
 check(status == 401 and body["error"] == "invalid_code", "un reset de correo inexistente falla como código malo")
 status, body = call("POST", "/auth/mfa/verify", {"challenge_id": known["reset_id"], "code": totp(secret)})
 check(status == 401, "el reset_id NO sirve para iniciar sesión (sin contraseña)")
 status, body = call("POST", "/auth/password/reset", {"reset_id": known["reset_id"], "code": "000000",
-                                                     "new_password": "OtraClave-Segura-1"})
+                                                     "new_password": "Nueva1!Abc"})
 check(status == 401 and body["error"] == "invalid_code", "código incorrecto → 401")
-status, body = call("POST", "/auth/password/reset", {"reset_id": known["reset_id"], "code": totp(secret),
-                                                     "new_password": "corta"})
-check(status == 400 and body["error"] == "weak_password", "contraseña débil → 400 sin gastar el código")
 wait_next_step()
-new_password = "OtraClave-Segura-1"
+status, body = call("POST", "/auth/password/reset", {
+    "reset_id": known["reset_id"],
+    "code": totp(secret),
+    "new_password": "aaaaaaaaaa",
+})
+check(status == 400 and body["error"] == "weak_password",
+      "recuperación rechaza contraseña que no cumple los grupos requeridos")
+for invalid_length_password in ("Abcdef1!X", "Abcdef1!Xyz"):
+    status, body = call("POST", "/auth/password/reset", {
+        "reset_id": known["reset_id"],
+        "code": totp(secret),
+        "new_password": invalid_length_password,
+    })
+    check(status == 400 and body["error"] == "weak_password",
+          "recuperación rechaza contraseña con longitud distinta de 10")
+new_password = "Nueva1!Abc"
 status, body = call("POST", "/auth/password/reset", {"reset_id": known["reset_id"], "code": totp(secret),
                                                      "new_password": new_password})
 check(status == 200, "código correcto → contraseña cambiada")

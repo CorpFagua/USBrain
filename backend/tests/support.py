@@ -162,6 +162,7 @@ def reset_user(email):
     sql(
         "for u in (select user_id from usb_users where email = '" + email + "') loop "
         "usb_auth.reset_mfa(u.user_id); usb_auth.set_password(u.user_id, '" + PASSWORD + "'); "
+        "update usb_users set must_change_password = false where user_id = u.user_id; "
         "usb_auth.unlock_user(u.user_id); end loop;"
     )
 

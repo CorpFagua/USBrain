@@ -45,6 +45,8 @@ create or replace package usb_auth authid definer as
   -- Paso 1: correo + contraseña → desafío 2FA (o enrolamiento si aún no tiene autenticador).
   function login(p_email varchar2, p_password varchar2,
                  p_device_id varchar2, p_device_name varchar2) return json_object_t;
+  function change_initial_password(p_challenge varchar2, p_current_password varchar2,
+                                   p_new_password varchar2) return json_object_t;
   -- Paso 2: código TOTP → sesión (access + refresh token).
   function verify_mfa(p_challenge varchar2, p_code varchar2) return json_object_t;
   -- Paso 2 alternativo: código de recuperación de un solo uso.
@@ -152,15 +154,27 @@ create or replace package body usb_auth as
     end if;
   end validate_device_id;
 
-  procedure validate_password_policy(p_password varchar2, p_email varchar2) is
+  procedure validate_password_policy(p_password varchar2, p_email varchar2,
+                                    p_exact_length boolean default false) is
     l_local_part varchar2(320) := lower(substr(p_email, 1, instr(p_email, '@') - 1));
+    l_character_groups pls_integer := 0;
   begin
-    if p_password is null or length(p_password) < 10 then
+    if p_password is null or (p_exact_length and lengthc(p_password) != 10) then
+      fail(e_bad_request, 'weak_password', 'La nueva contraseña debe tener exactamente 10 caracteres.');
+    elsif not p_exact_length and lengthc(p_password) < 10 then
       fail(e_bad_request, 'weak_password', 'La contraseña debe tener al menos 10 caracteres.');
-    elsif length(p_password) > 128 then
+    elsif not p_exact_length and lengthc(p_password) > 128 then
       fail(e_bad_request, 'weak_password', 'La contraseña no puede superar 128 caracteres.');
     elsif length(l_local_part) >= 4 and instr(lower(p_password), l_local_part) > 0 then
       fail(e_bad_request, 'weak_password', 'La contraseña no puede contener tu usuario de correo.');
+    end if;
+    if regexp_like(p_password, '[[:lower:]]') then l_character_groups := l_character_groups + 1; end if;
+    if regexp_like(p_password, '[[:upper:]]') then l_character_groups := l_character_groups + 1; end if;
+    if regexp_like(p_password, '[[:digit:]]') then l_character_groups := l_character_groups + 1; end if;
+    if regexp_like(p_password, '[^[:alnum:]]') then l_character_groups := l_character_groups + 1; end if;
+    if l_character_groups < 3 then
+      fail(e_bad_request, 'weak_password',
+           'Combina al menos 3 tipos de caracteres: mayúsculas, minúsculas, números y símbolos.');
     end if;
   end validate_password_policy;
 
@@ -462,8 +476,9 @@ create or replace package body usb_auth as
     l_user_id := null;
     validate_password_policy(p_password, l_email);
 
-    insert into usb_users (email, full_name, role, password_hash, password_salt, password_iterations)
-    values (l_email, trim(p_full_name), p_role, hextoraw('00'), hextoraw('00'), 0)
+    insert into usb_users (email, full_name, role, password_hash, password_salt, password_iterations,
+                           must_change_password)
+    values (l_email, trim(p_full_name), p_role, hextoraw('00'), hextoraw('00'), 0, true)
     returning user_id into l_user_id;
     store_password(l_user_id, p_password, true);
     audit_event('USER_CREATED', l_user_id, null, null, p_role);
@@ -478,7 +493,8 @@ create or replace package body usb_auth as
   begin
     validate_password_policy(p_password, l_user.email);
     store_password(p_user_id, p_password, true);
-    update usb_users set failed_logins = 0, locked_until = null where user_id = p_user_id;
+    update usb_users set failed_logins = 0, locked_until = null, must_change_password = true
+     where user_id = p_user_id;
     revoke_user_sessions(p_user_id, 'PASSWORD_RESET');
     audit_event('PASSWORD_RESET', p_user_id);
   end set_password;
@@ -567,11 +583,24 @@ create or replace package body usb_auth as
        and purpose != 'RESET'
        and (device_id = p_device_id or expires_at <= systimestamp or consumed_at is not null);
 
+    l_token := usb_crypto.new_token('usb_ch_');
+    if l_user.must_change_password then
+      insert into usb_login_challenges (challenge_hash, user_id, purpose, device_id, device_name,
+                                        ip_address, expires_at)
+      values (usb_crypto.sha256(l_token), l_user.user_id, 'CHANGE', p_device_id,
+              substr(p_device_name, 1, 200), g_ip,
+              systimestamp + numtodsinterval(l_ttl, 'SECOND'));
+      audit_event('PASSWORD_CHANGE_REQUIRED', l_user.user_id, null, p_device_id);
+      l_result.put('status', 'password_change_required');
+      l_result.put('challenge_id', l_token);
+      l_result.put('expires_in', l_ttl);
+      return l_result;
+    end if;
+
     l_purpose := case when l_user.mfa_enabled then 'MFA' else 'ENROLL' end;
     if l_purpose = 'ENROLL' then
       l_secret := usb_crypto.random_bytes(20);
     end if;
-    l_token := usb_crypto.new_token('usb_ch_');
 
     insert into usb_login_challenges (challenge_hash, user_id, purpose, pending_secret_enc,
                                       device_id, device_name, ip_address, expires_at)
@@ -600,6 +629,106 @@ create or replace package body usb_auth as
     end if;
     return l_result;
   end login;
+
+  function change_initial_password(p_challenge varchar2, p_current_password varchar2,
+                                   p_new_password varchar2) return json_object_t is
+    l_challenge usb_login_challenges%rowtype;
+    l_user      usb_users%rowtype;
+    l_hash      raw(32);
+    l_purpose   varchar2(10);
+    l_secret    raw(20);
+    l_result    json_object_t := json_object_t();
+    l_ttl       number := cfg_num('CHALLENGE_TTL_SECONDS');
+    l_issuer    varchar2(100) := cfg('TOTP_ISSUER');
+    l_secret_b32 varchar2(64);
+    l_enrollment json_object_t;
+  begin
+    if p_challenge is null or p_current_password is null or p_new_password is null then
+      fail(e_bad_request, 'missing_fields', 'Completa la contraseña temporal y la nueva contraseña.');
+    end if;
+
+    begin
+      select * into l_challenge
+        from usb_login_challenges
+       where challenge_hash = usb_crypto.sha256(p_challenge)
+         and purpose = 'CHANGE';
+    exception
+      when no_data_found then
+        fail(e_unauthorized, 'challenge_expired', 'El tiempo para cambiar la contraseña expiró. Inicia sesión de nuevo.');
+    end;
+    select * into l_user from usb_users where user_id = l_challenge.user_id for update;
+    begin
+      select * into l_challenge
+        from usb_login_challenges
+       where challenge_hash = usb_crypto.sha256(p_challenge)
+         and purpose = 'CHANGE'
+       for update;
+    exception
+      when no_data_found then
+        fail(e_unauthorized, 'challenge_expired', 'El tiempo para cambiar la contraseña expiró. Inicia sesión de nuevo.');
+    end;
+    if l_challenge.consumed_at is not null
+       or l_challenge.expires_at <= systimestamp
+       or l_challenge.attempts >= cfg_num('CHALLENGE_MAX_ATTEMPTS') then
+      fail(e_unauthorized, 'challenge_expired', 'El tiempo para cambiar la contraseña expiró. Inicia sesión de nuevo.');
+    end if;
+
+    ensure_not_locked(l_user);
+    ensure_active(l_user);
+    if not l_user.must_change_password then
+      fail(e_unauthorized, 'challenge_expired', 'El tiempo para cambiar la contraseña expiró. Inicia sesión de nuevo.');
+    end if;
+
+    l_hash := usb_crypto.pbkdf2_sha256(p_current_password, l_user.password_salt, l_user.password_iterations);
+    if not usb_crypto.equals(l_hash, l_user.password_hash) then
+      update usb_login_challenges set attempts = attempts + 1
+       where challenge_hash = l_challenge.challenge_hash;
+      register_failure(l_user.user_id, 'FIRST_PASSWORD_CHANGE_BAD_PASSWORD', l_challenge.device_id);
+      fail(e_unauthorized, 'invalid_credentials', 'La contraseña temporal no es correcta.');
+    end if;
+
+    validate_password_policy(p_new_password, l_user.email, p_exact_length => true);
+    if usb_crypto.equals(
+         usb_crypto.pbkdf2_sha256(p_new_password, l_user.password_salt, l_user.password_iterations),
+         l_user.password_hash) then
+      fail(e_bad_request, 'weak_password', 'La nueva contraseña debe ser distinta de la contraseña temporal.');
+    end if;
+
+    store_password(l_user.user_id, p_new_password, true);
+    update usb_users set must_change_password = false, failed_logins = 0, locked_until = null
+     where user_id = l_user.user_id;
+
+    l_purpose := case when l_user.mfa_enabled then 'MFA' else 'ENROLL' end;
+    if l_purpose = 'ENROLL' then
+      l_secret := usb_crypto.random_bytes(20);
+    end if;
+    update usb_login_challenges
+       set purpose = l_purpose,
+           pending_secret_enc = case when l_secret is not null then usb_crypto.encrypt(l_secret) end,
+           attempts = 0,
+           expires_at = systimestamp + numtodsinterval(l_ttl, 'SECOND')
+     where challenge_hash = l_challenge.challenge_hash;
+    audit_event('FIRST_PASSWORD_CHANGED', l_user.user_id, null, l_challenge.device_id);
+
+    l_result.put('status', case l_purpose when 'MFA' then 'mfa_required' else 'mfa_enrollment_required' end);
+    l_result.put('challenge_id', p_challenge);
+    l_result.put('expires_in', l_ttl);
+    if l_purpose = 'ENROLL' then
+      l_secret_b32 := usb_crypto.base32_encode(l_secret);
+      l_enrollment := json_object_t();
+      l_enrollment.put('secret', l_secret_b32);
+      l_enrollment.put('issuer', l_issuer);
+      l_enrollment.put('account', l_user.email);
+      l_enrollment.put('otpauth_uri',
+        'otpauth://totp/' || utl_url.escape(l_issuer, true, 'AL32UTF8') || ':'
+        || utl_url.escape(l_user.email, true, 'AL32UTF8')
+        || '?secret=' || l_secret_b32
+        || '&issuer=' || utl_url.escape(l_issuer, true, 'AL32UTF8')
+        || '&algorithm=SHA1&digits=6&period=30');
+      l_result.put('enrollment', l_enrollment);
+    end if;
+    return l_result;
+  end change_initial_password;
 
   function verify_mfa(p_challenge varchar2, p_code varchar2) return json_object_t is
     l_challenge usb_login_challenges%rowtype := load_challenge(p_challenge);
@@ -859,7 +988,7 @@ create or replace package body usb_auth as
       fail(e_forbidden, 'invalid_code', 'Código incorrecto o vencido.');
     end if;
 
-    validate_password_policy(p_new_password, l_user.email);
+    validate_password_policy(p_new_password, l_user.email, p_exact_length => true);
     if p_new_password = p_current_password then
       fail(e_bad_request, 'weak_password', 'La nueva contraseña debe ser distinta de la actual.');
     end if;
@@ -925,7 +1054,7 @@ create or replace package body usb_auth as
       fail(e_bad_request, 'missing_fields', 'Completa el código y la nueva contraseña.');
     end if;
     -- Reglas de longitud antes de gastar un intento (la regla del correo va después).
-    validate_password_policy(p_new_password, null);
+    validate_password_policy(p_new_password, null, p_exact_length => true);
 
     begin
       select * into l_challenge from usb_login_challenges
@@ -960,7 +1089,7 @@ create or replace package body usb_auth as
     end if;
 
     -- Identidad probada: ahora sí la regla completa (no puede contener el usuario del correo).
-    validate_password_policy(p_new_password, l_user.email);
+    validate_password_policy(p_new_password, l_user.email, p_exact_length => true);
 
     if l_step is null then
       update usb_recovery_codes set used_at = systimestamp
@@ -969,7 +1098,8 @@ create or replace package body usb_auth as
     end if;
     store_password(l_user.user_id, p_new_password, true);
     update usb_users
-       set failed_logins = 0, locked_until = null, totp_last_step = nvl(l_step, totp_last_step)
+       set failed_logins = 0, locked_until = null, totp_last_step = nvl(l_step, totp_last_step),
+           must_change_password = false
      where user_id = l_user.user_id;
     update usb_login_challenges set consumed_at = systimestamp
      where challenge_hash = l_challenge.challenge_hash;

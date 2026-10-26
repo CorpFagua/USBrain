@@ -47,6 +47,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -138,6 +139,7 @@ fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit
             when (state.screen) {
                 Screen.SPLASH -> SplashScreen(state)
                 Screen.LOGIN -> LoginScreen(state)
+                Screen.FIRST_PASSWORD_CHANGE -> FirstPasswordChangeScreen(state)
                 Screen.TWO_FACTOR -> TwoFactorScreen(state)
                 Screen.RECOVERY_CODES -> RecoveryCodesScreen(state)
                 Screen.FORGOT_PASSWORD -> ForgotPasswordScreen(state)
@@ -177,7 +179,7 @@ fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit
 private fun showsBottomBar(state: PrototypeState): Boolean {
     if (state.role == null) return false
     return state.screen !in listOf(
-        Screen.SPLASH, Screen.LOGIN, Screen.TWO_FACTOR, Screen.RECOVERY_CODES, Screen.FORGOT_PASSWORD,
+        Screen.SPLASH, Screen.LOGIN, Screen.FIRST_PASSWORD_CHANGE, Screen.TWO_FACTOR, Screen.RECOVERY_CODES, Screen.FORGOT_PASSWORD,
         Screen.PIN_SETUP, Screen.BIOMETRIC_OFFER, Screen.LOCK, Screen.ADMIN_USER_EDIT, Screen.ADMIN_ROLE_EDIT,
         // Al entrar a una conducta quedas dentro de ese flujo (Historial → conducta → tarea /
         // historial de registros): las tabs se ocultan hasta volver con el botón atrás.
@@ -942,6 +944,7 @@ private fun SplashScreen(state: PrototypeState) {
 
 @Composable
 private fun LoginScreen(state: PrototypeState) {
+    var passwordVisible by remember { mutableStateOf(false) }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -960,8 +963,13 @@ private fun LoginScreen(state: PrototypeState) {
         OutlinedTextField(
             state.loginPassword, { state.loginPassword = it }, Modifier.fillMaxWidth(),
             label = { Text("Contraseña") }, singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
+            visualTransformation = if (passwordVisible) {
+                androidx.compose.ui.text.input.VisualTransformation.None
+            } else {
+                PasswordVisualTransformation()
+            },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            trailingIcon = { PasswordVisibilityToggle(passwordVisible) { passwordVisible = !passwordVisible } },
         )
         state.authInfo?.let {
             Spacer(Modifier.height(10.dp))
@@ -989,6 +997,54 @@ private fun LoginScreen(state: PrototypeState) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+internal fun PasswordVisibilityToggle(visible: Boolean, onToggle: () -> Unit) {
+    IconButton(
+        onClick = onToggle,
+        modifier = Modifier.semantics {
+            contentDescription = if (visible) "Ocultar contraseña" else "Mostrar contraseña"
+        },
+    ) {
+        PasswordVisibilityIcon(visible)
+    }
+}
+
+@Composable
+private fun PasswordVisibilityIcon(visible: Boolean) {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    Canvas(Modifier.size(24.dp)) {
+        val strokeWidth = 1.8.dp.toPx()
+        val eye = Path().apply {
+            moveTo(size.width * 0.08f, size.height * 0.5f)
+            cubicTo(
+                size.width * 0.28f, size.height * 0.2f,
+                size.width * 0.72f, size.height * 0.2f,
+                size.width * 0.92f, size.height * 0.5f,
+            )
+            cubicTo(
+                size.width * 0.72f, size.height * 0.8f,
+                size.width * 0.28f, size.height * 0.8f,
+                size.width * 0.08f, size.height * 0.5f,
+            )
+        }
+        drawPath(eye, color, style = Stroke(width = strokeWidth))
+        drawCircle(
+            color = color,
+            radius = size.minDimension * 0.13f,
+            center = Offset(size.width * 0.5f, size.height * 0.5f),
+        )
+        if (!visible) {
+            drawLine(
+                color = color,
+                start = Offset(size.width * 0.18f, size.height * 0.82f),
+                end = Offset(size.width * 0.82f, size.height * 0.18f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round,
+            )
+        }
     }
 }
 
@@ -2685,4 +2741,3 @@ private fun TherapistAssignedScreen(state: PrototypeState) {
         Spacer(Modifier.height(24.dp))
     }
 }
-

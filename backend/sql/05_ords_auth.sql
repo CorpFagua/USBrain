@@ -29,6 +29,7 @@ begin
                      p_comments => 'Login con contraseña + TOTP, sesiones persistentes por dispositivo.');
 
   endpoint('login',        'POST',   'begin usb_api.login(:body_text); end;');
+  endpoint('password/first-login', 'POST', 'begin usb_api.change_initial_password(:body_text); end;');
   endpoint('mfa/verify',   'POST',   'begin usb_api.verify_mfa(:body_text); end;');
   endpoint('mfa/recovery', 'POST',   'begin usb_api.verify_recovery_code(:body_text); end;');
   endpoint('refresh',      'POST',   'begin usb_api.refresh(:body_text); end;');
