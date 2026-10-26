@@ -548,8 +548,25 @@ private fun TaskCard(task: TrackTask, pendingCta: String = "Llenar tarea →", o
     }
 }
 
+private fun monthKey(date: LocalDate): String = "${date.year}-${date.monthNumber.toString().padStart(2, '0')}"
+
+private fun monthLabel(key: String): String {
+    val parts = key.split("-")
+    val month = parts.getOrNull(1)?.toIntOrNull() ?: 1
+    val names = listOf("Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre")
+    return "${names[(month - 1).coerceIn(0, 11)]} ${parts.firstOrNull().orEmpty()}"
+}
+
 @Composable
-private fun TrendChart(behavior: Behavior, dimension: Dimension, phase: Phase, yMax: Double, modifier: Modifier = Modifier) {
+private fun TrendChart(
+    behavior: Behavior,
+    dimension: Dimension,
+    phase: Phase,
+    yMax: Double,
+    periodKey: String?,
+    monthlyPanel: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val s = LocalUsBrainSemantic.current
     val measurer = rememberTextMeasurer()
     val axisColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -557,10 +574,16 @@ private fun TrendChart(behavior: Behavior, dimension: Dimension, phase: Phase, y
     val gridColor = s.grid
     val baseC = s.baseline
     val intC = s.intervention
-    val series = behavior.chartValuesFor(dimension)
+    val rawSeries = behavior.chartValuesFor(dimension)
         .filter { it.first.phase == phase }
         .map { it.first.date to it.second }
+        .filter { periodKey == null || monthKey(it.first) == periodKey }
         .sortedBy { it.first }
+    // En la vista global se representa un promedio semanal. Así tres meses siguen siendo
+    // comparables sin dibujar y rotular decenas de días sobre el mismo eje.
+    val series = if (monthlyPanel && periodKey == null && rawSeries.size > 14) {
+        rawSeries.chunked(7).map { week -> week.first().first to week.map { it.second }.average() }
+    } else rawSeries
     val dataPoints = series.map { it.second }
     val lineColor = Color(0xFF008DD2)
     val pointColor = Color(0xFFF44336)
@@ -576,7 +599,9 @@ private fun TrendChart(behavior: Behavior, dimension: Dimension, phase: Phase, y
             val maxV = yMax.coerceAtLeast(1.0)
         fun xAt(i: Int): Float = padL + if (n <= 1) 0f else i.toFloat() / (n - 1) * iw
         fun yAt(v: Double): Float = padT + ih - (v / maxV).toFloat() * ih
-        val gridSteps = maxV.toInt()
+        // Mantener una retícula legible incluso cuando hay muchos valores (p. ej. 90 días).
+        // Una línea por unidad saturaba visualmente la gráfica.
+        val gridSteps = 4
         for (g in 0..gridSteps) {
             val gy = padT + ih * g / gridSteps
             drawLine(gridColor, Offset(padL, gy), Offset(size.width - padR, gy), 1f)
@@ -596,8 +621,14 @@ private fun TrendChart(behavior: Behavior, dimension: Dimension, phase: Phase, y
             drawCircle(pointColor, if (last) 3.4f else 2.2f, Offset(xAt(i), yAt(v)))
             if (last) drawCircle(surface, 4.5f, Offset(xAt(i), yAt(v)), style = Stroke(2f))
         }
+        val labelStride = (series.size / 6).coerceAtLeast(1)
         series.forEachIndexed { index, point ->
-            val dayName = listOf("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")[point.first.dayOfWeek.ordinal]
+            if (index != 0 && index != series.lastIndex && index % labelStride != 0) return@forEachIndexed
+            val dayName = if (monthlyPanel) {
+                "${point.first.dayOfMonth.toString().padStart(2, '0')}/${point.first.monthNumber.toString().padStart(2, '0')}"
+            } else {
+                listOf("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")[point.first.dayOfWeek.ordinal]
+            }
             val label = measurer.measure(dayName, style = TextStyle(fontSize = 9.sp, color = axisColor, fontWeight = FontWeight.SemiBold))
             drawText(label, topLeft = Offset(xAt(index) - label.size.width / 2f, size.height - padB + 9f))
         }
@@ -609,11 +640,14 @@ private fun TrendChart(behavior: Behavior, dimension: Dimension, phase: Phase, y
 // y es intercambiable cuando la conducta tiene más de una. Por defecto usa la dimensión
 // principal de la conducta para las vistas que no ofrecen selector propio.
 @Composable
-private fun ChartCard(behavior: Behavior, dimension: Dimension = behavior.dimension) {
+private fun ChartCard(behavior: Behavior, dimension: Dimension = behavior.dimension, monthlyPanel: Boolean = false) {
     val s = LocalUsBrainSemantic.current
     val baselineRecords = behavior.baselineEntries.filter { it.dimension == dimension }
     val interventionRecords = behavior.recordsFor(dimension).filter { it.phase == Phase.INTERVENCION }
     val yMax = behavior.chartValuesFor(dimension).maxOfOrNull { it.second }?.let { kotlin.math.ceil(it) } ?: 1.0
+    val availableMonths = behavior.chartValuesFor(dimension).map { monthKey(it.first.date) }.distinct().sorted()
+    var selectedPeriod by remember(behavior.id, dimension) { mutableStateOf("GLOBAL") }
+    val selectedMonth = selectedPeriod.takeUnless { it == "GLOBAL" }
     val expectedDirection = if (behavior.type == BehaviorType.ADAPTATIVA) "Se espera aumento" else "Se espera reducción"
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
@@ -637,12 +671,31 @@ private fun ChartCard(behavior: Behavior, dimension: Dimension = behavior.dimens
                 PhasePill(if (behavior.baselineOpen) Phase.LINEA_BASE else Phase.INTERVENCION)
             }
             Spacer(Modifier.height(10.dp))
-            PhaseChartSection("Línea base de conducta", baselineRecords.isNotEmpty()) {
-                TrendChart(behavior, dimension, Phase.LINEA_BASE, yMax)
+            if (monthlyPanel) {
+                DropdownField(
+                    label = "Periodo de visualización",
+                    selectedLabel = if (selectedPeriod == "GLOBAL") "Vista global · ${availableMonths.size} meses" else monthLabel(selectedPeriod),
+                    placeholder = "Selecciona un periodo",
+                    options = listOf("GLOBAL" to "Vista global · ${availableMonths.size} meses") + availableMonths.map { it to monthLabel(it) },
+                    onSelect = { selectedPeriod = it },
+                )
+                Text(
+                    if (selectedMonth == null) "Resumen semanal del periodo completo" else "Detalle diario del mes seleccionado",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+            val effectiveMonth = selectedMonth.takeIf { monthlyPanel }
+            val hasBaseline = baselineRecords.any { effectiveMonth == null || monthKey(it.date) == effectiveMonth }
+            val hasIntervention = interventionRecords.any { effectiveMonth == null || monthKey(it.date) == effectiveMonth }
+            PhaseChartSection("Línea base de conducta", hasBaseline) {
+                TrendChart(behavior, dimension, Phase.LINEA_BASE, yMax, effectiveMonth, monthlyPanel)
             }
             Spacer(Modifier.height(14.dp))
-            PhaseChartSection("Conducta en intervención", interventionRecords.isNotEmpty()) {
-                TrendChart(behavior, dimension, Phase.INTERVENCION, yMax)
+            PhaseChartSection("Conducta en intervención", hasIntervention) {
+                TrendChart(behavior, dimension, Phase.INTERVENCION, yMax, effectiveMonth, monthlyPanel)
             }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -650,7 +703,7 @@ private fun ChartCard(behavior: Behavior, dimension: Dimension = behavior.dimens
                 LegendDot(s.intervention, "Intervención")
             }
             Text(
-                "Eje X: día de observación · Eje Y: ${axisUnit(dimension)} · $expectedDirection",
+                "Seguimiento: día de observación · Medición: ${axisUnit(dimension)} · $expectedDirection",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
@@ -704,13 +757,16 @@ private fun WidgetTrendChart(task: TrackTask, widget: WidgetConfig, series: List
         val path = Path()
         series.forEachIndexed { i, (_, v) -> if (i == 0) path.moveTo(xAt(i), yAt(v)) else path.lineTo(xAt(i), yAt(v)) }
         drawPath(path, lineColor, style = Stroke(width = 2.4f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        val labelStride = (series.size / 6).coerceAtLeast(1)
         series.forEachIndexed { i, (_, v) ->
             val last = i == n - 1
             drawCircle(pointColor, if (last) 3.4f else 2.2f, Offset(xAt(i), yAt(v)))
             if (last) drawCircle(surface, 4.5f, Offset(xAt(i), yAt(v)), style = Stroke(2f))
-            val dayLabel = spanishWeekday(series[i].first)
-            val label = measurer.measure(dayLabel, style = TextStyle(fontSize = 9.sp, color = axisColor))
-            drawText(label, topLeft = Offset(xAt(i) - label.size.width / 2f, size.height - 17f))
+            if (i == 0 || i == series.lastIndex || i % labelStride == 0) {
+                val dayLabel = spanishWeekday(series[i].first)
+                val label = measurer.measure(dayLabel, style = TextStyle(fontSize = 9.sp, color = axisColor))
+                drawText(label, topLeft = Offset(xAt(i) - label.size.width / 2f, size.height - 17f))
+            }
         }
     }
     if (series.isNotEmpty()) {
@@ -755,7 +811,7 @@ private fun WidgetChartCard(task: TrackTask, widget: WidgetConfig) {
                 }
             }
             Text(
-                "Eje X: fecha del registro · Eje Y: ${widget.name}${widget.unit?.let { " ($it)" } ?: ""}",
+                "Seguimiento: fecha del registro · Medición: ${widget.name}${widget.unit?.let { " ($it)" } ?: ""}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
@@ -788,7 +844,8 @@ private fun PhaseChartSection(title: String, hasRecords: Boolean, chart: @Compos
 
 @Composable
 private fun ChartCard(patient: Patient) {
-    patient.behaviors.forEach { behavior -> ChartCard(behavior) }
+    val monthlyPanel = patient.case.title == "Estudio longitudinal de habitos de sueno (3 meses)"
+    patient.behaviors.forEach { behavior -> ChartCard(behavior, monthlyPanel = monthlyPanel) }
 }
 
 @Composable
@@ -1494,7 +1551,7 @@ private fun spanishWeekday(date: LocalDate): String = when (date.dayOfWeek.name)
 }
 
 @Composable
-private fun CalendarField(value: String, placeholder: String, onDateSelected: (String) -> Unit) {
+internal fun CalendarField(value: String, placeholder: String, onDateSelected: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
         Text(value.ifBlank { placeholder }, modifier = Modifier.fillMaxWidth())
@@ -1692,6 +1749,7 @@ private fun PatientDoneScreen(state: PrototypeState) {
 @Composable
 private fun PatientProgressScreen(state: PrototypeState) {
     val p = state.me()
+    val monthlyPanel = p.case.title == "Estudio longitudinal de habitos de sueno (3 meses)"
     val behaviors = state.behaviorsFor(p.id)
     val adaptive = behaviors.filter { it.type == BehaviorType.ADAPTATIVA }
     val maladaptive = behaviors.filter { it.type == BehaviorType.DESADAPTATIVA }
@@ -1706,11 +1764,11 @@ private fun PatientProgressScreen(state: PrototypeState) {
         } else {
             if (adaptive.isNotEmpty()) {
                 SectionLabel("Conductas adaptativas")
-                adaptive.forEach { b -> ChartCard(state.progressForBehavior(b)) }
+                adaptive.forEach { b -> ChartCard(state.progressForBehavior(b), monthlyPanel = monthlyPanel) }
             }
             if (maladaptive.isNotEmpty()) {
                 SectionLabel("Conductas desadaptativas")
-                maladaptive.forEach { b -> ChartCard(state.progressForBehavior(b)) }
+                maladaptive.forEach { b -> ChartCard(state.progressForBehavior(b), monthlyPanel = monthlyPanel) }
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -2169,7 +2227,11 @@ private fun TherapistBehaviorScreen(state: PrototypeState) {
                                 WidgetTimeline(activeWidgetTask)
                             }
                         }
-                        selectedDimension != null -> ChartCard(behavior, selectedDimension!!)
+                        selectedDimension != null -> ChartCard(
+                            behavior,
+                            selectedDimension!!,
+                            monthlyPanel = patient.case.title == "Estudio longitudinal de habitos de sueno (3 meses)",
+                        )
                         else -> Text(
                             "Todavía no hay actividades de medición para esta conducta.",
                             style = MaterialTheme.typography.bodySmall,

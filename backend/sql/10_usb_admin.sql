@@ -213,6 +213,8 @@ create or replace package body usb_admin as
 
   function create_user(p_request json_object_t) return number is
     l_role         usb_roles%rowtype;
+    l_actor_role   usb_users.role%type;
+    l_actor_id     number := actor;
     l_therapist_id number := to_id(p_request.get_string('therapist_id'));
     l_full_name    varchar2(200) := trim(p_request.get_string('full_name'));
     l_program      varchar2(200) := trim(p_request.get_string('program'));
@@ -222,6 +224,13 @@ create or replace package body usb_admin as
   begin
     usb_auth.require_permission('users.manage');
     l_role := load_role(p_request.get_string('role'));
+    if l_role.role_id = 'SUPERADMIN' then
+      select role into l_actor_role from usb_users where user_id = l_actor_id;
+      if l_actor_role != 'SUPERADMIN' then
+        fail(usb_auth.e_forbidden, 'forbidden',
+             'Solo un super administrador puede crear otro super administrador.');
+      end if;
+    end if;
     require_can_grant_role(l_role.role_id, 'No puedes crear usuarios con un rol que tiene permisos de administración que tú no tienes.');
 
     if l_role.app_profile = 'PATIENT' then

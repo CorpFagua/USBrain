@@ -11,8 +11,11 @@ declare
   procedure upsert(p_email varchar2, p_full_name varchar2, p_role varchar2) is
     l_user_id number;
   begin
-    -- Si ya existe no se toca: reinstalar no debe cerrar las sesiones abiertas en la app.
+    -- La semilla siempre restaura las credenciales de demostración para que el
+    -- entorno sea reproducible. También reinicia el 2FA para el primer ingreso.
     select user_id into l_user_id from usb_users where email = p_email;
+    usb_auth.set_password(l_user_id, '&dev_pwd');
+    usb_auth.reset_mfa(l_user_id);
   exception
     when no_data_found then
       l_user_id := usb_auth.create_user(p_email, p_full_name, p_role, '&dev_pwd');
@@ -239,6 +242,82 @@ begin
                 'Cada mañana estima cuántos minutos pasaron desde que apagaste la luz hasta quedarte dormido.',
                 'REGISTRO_AUTONOMO', 'DURACION', 'LINEA_BASE', true, 'Diaria', false);
   end if;
+  commit;
+end;
+/
+
+-- -----------------------------------------------------------------------------
+-- Caso ficticio de seguimiento longitudinal (3 meses) para pruebas integrales.
+-- Paciente: Laura Mendoza · 01-jul-2026 a 30-sep-2026.
+-- -----------------------------------------------------------------------------
+declare
+  l_therapist number;
+  l_patient number;
+  l_case number;
+  l_b_sleep number;
+  l_b_routine number;
+  l_t_base number;
+  l_t_sleep number;
+  l_t_routine number;
+  l_count number;
+  function uid(p_email varchar2) return number is l_id number; begin
+    select user_id into l_id from usb_users where email = p_email; return l_id;
+  end;
+begin
+  l_therapist := uid('e.patino@usb.edu.co');
+  begin
+    l_patient := uid('laura.mendoza@usbbog.edu.co');
+    usb_auth.set_password(l_patient, '&dev_pwd');
+    usb_auth.reset_mfa(l_patient);
+  exception when no_data_found then
+    l_patient := usb_auth.create_user('laura.mendoza@usbbog.edu.co', 'Laura Mendoza (Paciente demo)', 'PATIENT', '&dev_pwd');
+  end;
+  merge into usb_patient_profiles p using (select l_patient user_id from dual) s on (p.user_id=s.user_id)
+    when not matched then insert (user_id, therapist_id, birth_date, program, condition, color_argb)
+      values (l_patient, l_therapist, date '2001-11-14', 'Programa de habilidades para la vida', 'Dificultad de conciliacion del sueno y habitos irregulares', 4294929238);
+  begin select case_id into l_case from usb_cases where patient_id=l_patient;
+  exception when no_data_found then insert into usb_cases(patient_id,title) values(l_patient,'Estudio longitudinal de habitos de sueno (3 meses)') returning case_id into l_case; end;
+  select count(*) into l_count from usb_behaviors where case_id=l_case;
+  if l_count = 0 then
+    insert into usb_patient_diagnoses(patient_id,code,label,assigned_by) values(l_patient,'F51.0','Insomnio no organico (caso ficticio)',l_therapist);
+    insert into usb_behaviors(case_id,name,operational_definition,behavior_type,baseline_open,baseline_closed_at,baseline_dimensions,created_by)
+      values(l_case,'Minutos para conciliar el sueno','Minutos desde apagar la luz hasta quedarse dormida.','DESADAPTATIVA',false,from_tz(cast(date '2026-07-14' as timestamp),'America/Bogota'),'DURACION',l_therapist) returning behavior_id into l_b_sleep;
+    insert into usb_behaviors(case_id,name,operational_definition,behavior_type,baseline_open,baseline_closed_at,baseline_dimensions,created_by)
+      values(l_case,'Rutina de desconexion nocturna','Realizar lectura breve, respiracion y apagar pantallas antes de dormir.','ADAPTATIVA',false,from_tz(cast(date '2026-07-14' as timestamp),'America/Bogota'),'FRECUENCIA',l_therapist) returning behavior_id into l_b_routine;
+    update usb_behaviors set replacement_behavior_id=l_b_routine where behavior_id=l_b_sleep;
+    insert into usb_tasks(behavior_id,title,instructions,task_type,dimension,metric_unit,phase,is_recurring,frequency,created_by)
+      values(l_b_sleep,'Línea base: tiempo para dormir','Registrar cada mañana los minutos estimados para conciliar el sueño.','REGISTRO_AUTONOMO','DURACION','MINUTOS','LINEA_BASE',true,'Diaria',l_therapist) returning task_id into l_t_base;
+    insert into usb_tasks(behavior_id,title,instructions,task_type,dimension,metric_unit,phase,is_recurring,frequency,reminder_active,created_by)
+      values(l_b_sleep,'Seguimiento del tiempo para dormir','Registrar los minutos y anotar qué estrategia ayudó.','REGISTRO_AUTONOMO','DURACION','MINUTOS','INTERVENCION',true,'Diaria',true,l_therapist) returning task_id into l_t_sleep;
+    insert into usb_tasks(behavior_id,title,instructions,task_type,dimension,phase,is_recurring,frequency,reminder_active,widget_id,therapeutic_goal,created_by)
+      values(l_b_routine,'Cumplimiento de rutina nocturna','Completar lectura, respiración y desconexión de pantallas; registrar el porcentaje.','MEDICION_CONFIGURABLE','FRECUENCIA','INTERVENCION',true,'Diaria',true,'w-cumplimiento','Consolidar una rutina sostenible antes de dormir.',l_therapist) returning task_id into l_t_routine;
+    for i in 0..13 loop
+      insert into usb_task_entries(task_id,entry_date,value,note,phase,observation_minutes,is_baseline,recorded_by)
+        values(l_t_base,date '2026-07-01'+i,58-i*2,'Semana de línea base; sin rutina estable.','LINEA_BASE',480,true,l_patient);
+    end loop;
+    for i in 0..76 loop
+      insert into usb_task_entries(task_id,entry_date,value,note,phase,observation_minutes,is_baseline,recorded_by)
+        values(l_t_sleep,date '2026-07-15'+i,round(28- i*0.20 + mod(i,3)*2),'Aplicó respiración y dejó el teléfono fuera de la habitación.','INTERVENCION',480,false,l_patient);
+      insert into usb_widget_entries(task_id,widget_id,entry_date,entry_time,numeric_value,note,recorded_by)
+        values(l_t_routine,'w-cumplimiento',date '2026-07-15'+i,'21:30',least(100,round(45+i*0.65+mod(i,4)*5)),'Registro diario de la rutina nocturna.',l_patient);
+    end loop;
+  else
+    select min(behavior_id), max(behavior_id) into l_b_sleep, l_b_routine from usb_behaviors where case_id=l_case;
+  end if;
+  -- Normaliza textos de la ficha demo para que no dependan de la codificacion del cliente SQL.
+  update usb_cases set title='Estudio longitudinal de habitos de sueno (3 meses)' where case_id=l_case;
+  update usb_patient_profiles set condition='Dificultad de conciliacion del sueno y habitos irregulares' where user_id=l_patient;
+  update usb_patient_diagnoses set label='Insomnio no organico (caso ficticio)' where patient_id=l_patient and code='F51.0';
+  update usb_behaviors set name='Minutos para conciliar el sueno', operational_definition='Minutos desde apagar la luz hasta quedarse dormida.' where behavior_id=l_b_sleep;
+  update usb_behaviors set name='Rutina de desconexion nocturna', operational_definition='Realizar lectura breve, respiracion y apagar pantallas antes de dormir.' where behavior_id=l_b_routine;
+  update usb_tasks set title=replace(title, chr(65533), ''), instructions=replace(instructions, chr(65533), '')
+    where behavior_id in (l_b_sleep, l_b_routine);
+  update usb_tasks set title='Linea base: tiempo para dormir', instructions='Registrar cada manana los minutos estimados para conciliar el sueno.'
+    where behavior_id=l_b_sleep and phase='LINEA_BASE';
+  update usb_tasks set title='Seguimiento del tiempo para dormir', instructions='Registrar los minutos y anotar que estrategia ayudo.'
+    where behavior_id=l_b_sleep and phase='INTERVENCION';
+  update usb_tasks set title='Cumplimiento de rutina nocturna', instructions='Completar lectura, respiracion y desconexion de pantallas; registrar el porcentaje.'
+    where behavior_id=l_b_routine;
   commit;
 end;
 /

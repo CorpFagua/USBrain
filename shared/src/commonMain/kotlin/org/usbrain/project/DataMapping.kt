@@ -16,13 +16,13 @@ import org.usbrain.project.data.WidgetEntryDto
  */
 fun WidgetDto.toWidgetConfig() = WidgetConfig(
     id = id,
-    name = name,
+    name = name.cleanRemoteText(),
     valueKind = enumOr(valueKind, WidgetValueKind.NUMERIC),
-    unit = unit,
+    unit = unit?.cleanRemoteText(),
     minValue = minValue,
     maxValue = maxValue,
     options = options,
-    description = description,
+    description = description?.cleanRemoteText(),
     isPreset = isPreset,
 )
 
@@ -33,14 +33,14 @@ private fun PatientDto.toPatient(widgets: List<WidgetConfig>): Patient {
     val caseId = case?.id ?: "case-$id"
     return Patient(
         id = id,
-        name = name,
+        name = name.cleanRemoteText(),
         age = age,
-        program = program,
+        program = program.cleanRemoteText(),
         colorArgb = color,
-        condition = condition,
-        case = SingleCase(caseId, id, case?.title ?: "Caso", case?.behaviors.orEmpty().map { it.toBehavior(widgets) }),
-        diagnoses = diagnoses.map { Cie10Diagnosis(it.code, it.label) },
-        therapistName = therapistName.orEmpty(),
+        condition = condition.cleanRemoteText(),
+        case = SingleCase(caseId, id, (case?.title ?: "Caso").cleanRemoteText(), case?.behaviors.orEmpty().map { it.toBehavior(widgets) }),
+        diagnoses = diagnoses.map { Cie10Diagnosis(it.code, it.label.cleanRemoteText()) },
+        therapistName = therapistName.orEmpty().cleanRemoteText(),
     )
 }
 
@@ -48,15 +48,15 @@ private fun BehaviorDto.toBehavior(widgets: List<WidgetConfig>): Behavior {
     val baseline = baselineEntries.map {
         BehaviorRecord(
             id = it.id, taskId = it.taskId, behaviorId = id, date = LocalDate.parse(it.date),
-            value = it.value, note = it.note, phase = Phase.LINEA_BASE,
+            value = it.value, note = it.note.cleanRemoteText(), phase = Phase.LINEA_BASE,
             dimension = enumOr(it.dimension, Dimension.FRECUENCIA), observationMinutes = it.observationMinutes,
         )
     }
     return Behavior(
         id = id,
         caseId = caseId,
-        name = name,
-        operationalDefinition = operationalDefinition,
+        name = name.cleanRemoteText(),
+        operationalDefinition = operationalDefinition.cleanRemoteText(),
         type = enumOr(type, BehaviorType.DESADAPTATIVA),
         baselineOpenInitially = baselineOpen,
         behavioralFunctionId = functionId,
@@ -73,8 +73,8 @@ private fun TaskDto.toTask(widgets: List<WidgetConfig>): TrackTask {
     return TrackTask(
         id = id,
         behaviorId = behaviorId,
-        title = title,
-        instructions = instructions,
+        title = title.cleanRemoteText(),
+        instructions = instructions.cleanRemoteText(),
         taskType = enumOr(taskType, TaskType.REGISTRO_AUTONOMO),
         dimension = enumOr(dimension, Dimension.FRECUENCIA),
         metricUnit = metricUnit?.let { enumOr<MetricUnit>(it, MetricUnit.SOLO_COMPLETADO) },
@@ -86,10 +86,10 @@ private fun TaskDto.toTask(widgets: List<WidgetConfig>): TrackTask {
         phase = enumOr(phase, Phase.LINEA_BASE),
         status = enumOr(status, TaskStatus.PENDIENTE),
         entries = entries.map {
-            TaskEntry(LocalDate.parse(it.date), it.value, it.note, enumOr(it.phase, Phase.INTERVENCION), it.observationMinutes)
+            TaskEntry(LocalDate.parse(it.date), it.value, it.note.cleanRemoteText(), enumOr(it.phase, Phase.INTERVENCION), it.observationMinutes)
         },
         widgetConfig = widget,
-        therapeuticGoal = therapeuticGoal,
+        therapeuticGoal = therapeuticGoal?.cleanRemoteText(),
         widgetEntries = if (widget == null) emptyList() else widgetEntries.map { it.toWidgetEntry(id, widget) },
     )
 }
@@ -106,8 +106,17 @@ private fun WidgetEntryDto.toWidgetEntry(taskId: String, widget: WidgetConfig) =
         WidgetValueKind.TEXT -> WidgetValue.Text(textValue.orEmpty())
         WidgetValueKind.MULTI_SELECT -> WidgetValue.MultiSelect(selectedOptions)
     },
-    note = note,
+    note = note?.cleanRemoteText(),
 )
+
+/** Evita que bytes UTF-8 dañados en datos históricos lleguen a las pantallas. */
+private fun String.cleanRemoteText(): String =
+    replace("\uFFFD", "")
+        .replace("Ã¡", "á").replace("Ã©", "é").replace("Ã­", "í")
+        .replace("Ã³", "ó").replace("Ãº", "ú").replace("Ã±", "ñ")
+        .replace("Ã", "Á").replace("Ã‰", "É").replace("Ã", "Í")
+        .replace("Ã“", "Ó").replace("Ãš", "Ú").replace("Ã‘", "Ñ")
+
 
 /** Un valor desconocido (p. ej. un enum nuevo en el servidor) no rompe la app: usa el valor por defecto. */
 private inline fun <reified T : Enum<T>> enumOr(name: String, default: T): T =
