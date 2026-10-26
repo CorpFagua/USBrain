@@ -19,9 +19,14 @@ val localProperties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
-val androidApiBaseUrl: String = localProperties.getProperty("usbrain.android.apiBaseUrl").orEmpty().trim()
-val iosApiBaseUrl: String = localProperties.getProperty("usbrain.ios.apiBaseUrl").orEmpty().trim()
-val webApiBaseUrl: String = localProperties.getProperty("usbrain.web.apiBaseUrl").orEmpty().trim()
+// Una variable de entorno gana sobre local.properties: sirve para compilar el dist de stage
+// (USBRAIN_WEB_API_BASE_URL=https://….ngrok-free.app/ords/usbrain/v1) o en un servidor de build.
+fun apiBaseUrl(property: String, environment: String): String =
+    providers.environmentVariable(environment).orNull?.trim()?.takeIf { it.isNotEmpty() }
+        ?: localProperties.getProperty(property).orEmpty().trim()
+val androidApiBaseUrl: String = apiBaseUrl("usbrain.android.apiBaseUrl", "USBRAIN_ANDROID_API_BASE_URL")
+val iosApiBaseUrl: String = apiBaseUrl("usbrain.ios.apiBaseUrl", "USBRAIN_IOS_API_BASE_URL")
+val webApiBaseUrl: String = apiBaseUrl("usbrain.web.apiBaseUrl", "USBRAIN_WEB_API_BASE_URL")
 val generateApiConfig by tasks.registering {
     val outputDir = layout.buildDirectory.dir("generated/usbrain/kotlin")
     // Copias locales: la acción no puede referenciar el script (caché de configuración).

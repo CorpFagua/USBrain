@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
@@ -50,6 +51,11 @@ class UsBrainApi(
         install(HttpTimeout) {
             requestTimeoutMillis = 20_000
             connectTimeoutMillis = 10_000
+        }
+        defaultRequest {
+            // Stage por ngrok gratuito: sin este encabezado, ngrok responde a los navegadores con
+            // una página de aviso en vez de la API. En local no tiene efecto (ORDS lo ignora).
+            header("ngrok-skip-browser-warning", "true")
         }
     }
 

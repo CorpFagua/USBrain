@@ -6,7 +6,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.Before
 import org.usbrain.project.data.UsBrainApi
+import org.usbrain.project.data.SecureStorage
+import org.usbrain.project.data.SessionKeys
+import org.usbrain.project.security.AppLock
 import java.io.File
 import java.nio.ByteBuffer
 import javax.crypto.Mac
@@ -35,6 +39,12 @@ class LiveApiIntegrationTest {
             .associate { it.substringBefore("=") to it.substringAfter("=") }
     }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    @Before
+    fun clearPreviousDeviceSession() {
+        AppLock.clear()
+        SecureStorage.put(SessionKeys.REFRESH_TOKEN, null)
+    }
 
     private fun newState() = PrototypeState(
         UsBrainApi(baseUrl = "http://localhost:8080/ords/usbrain/v1", deviceName = "Prueba JVM"),

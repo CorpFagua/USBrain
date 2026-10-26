@@ -6,6 +6,7 @@ xcuserdata
 !src/**/build/
 local.properties
 .idea
+.vscode-respaldo/
 .DS_Store
 captures
 .externalNativeBuild

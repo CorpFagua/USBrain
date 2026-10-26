@@ -202,6 +202,7 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
     val isPatientRole = state.draftRoleProfileOf(state.draftUserRole) == "PATIENT"
     val initialPasswordAssessment = assessPassword(state.draftUserPassword, state.draftUserEmail)
     val actionPasswordAssessment = assessPassword(state.draftActionPassword, user?.email.orEmpty())
+    val canCreateSuperAdmin = state.sessionUser?.role == "SUPERADMIN"
     ScreenScaffold {
         BackHeader(if (editing == null) "Nuevo usuario" else "Editar usuario") { state.screen = Screen.ADMIN_USERS }
         if (editing == null) {
@@ -221,6 +222,7 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
             // Un paciente solo cambia a otros roles de paciente, y viceversa (lo valida también el servidor).
             options = roles
                 .filter { user == null || (it.profile == "PATIENT") == user.isPatient }
+                .filter { it.id != "SUPERADMIN" || canCreateSuperAdmin }
                 .map { it.id to "${it.name} · ${PROFILE_LABELS[it.profile]}" },
             onSelect = { state.draftUserRole = it },
         )
@@ -233,8 +235,11 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
                 onSelect = { state.draftUserTherapistId = it },
             )
             if (editing == null) {
-                OutlinedTextField(state.draftUserBirthDate, { state.draftUserBirthDate = it }, Modifier.fillMaxWidth(),
-                    label = { Text("Fecha de nacimiento (AAAA-MM-DD)") }, singleLine = true)
+                CalendarField(
+                    value = state.draftUserBirthDate,
+                    placeholder = "Seleccionar fecha de nacimiento",
+                    onDateSelected = { state.draftUserBirthDate = it },
+                )
                 OutlinedTextField(state.draftUserProgram, { state.draftUserProgram = it }, Modifier.fillMaxWidth(),
                     label = { Text("Programa y semestre") }, singleLine = true)
                 OutlinedTextField(state.draftUserCondition, { state.draftUserCondition = it }, Modifier.fillMaxWidth(),

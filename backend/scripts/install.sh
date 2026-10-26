@@ -11,6 +11,8 @@ trap 'status=$?; printf "Error: install.sh failed at line %s (exit %s).\n" "$LIN
 BACKEND_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="${USBRAIN_ENV:-$BACKEND_DIR/.env}"
 SQL_DIR="$BACKEND_DIR/sql"
+# Permite fijar de forma explícita la contraseña de la semilla sin versionarla.
+REQUESTED_DEV_SEED_PASSWORD="${USBRAIN_DEV_SEED_PASSWORD:-}"
 
 random_password() {
   local length="${1:-23}" value
@@ -35,6 +37,11 @@ fi
 chmod 600 "$ENV_FILE"
 # shellcheck disable=SC1090
 source "$ENV_FILE"
+
+if [[ -n "$REQUESTED_DEV_SEED_PASSWORD" ]]; then
+  DEV_SEED_PASSWORD="$REQUESTED_DEV_SEED_PASSWORD"
+  set_env DEV_SEED_PASSWORD "$DEV_SEED_PASSWORD"
+fi
 
 # Contraseñas que falten: se generan una sola vez y quedan guardadas en el .env.
 if [[ -z "${USBRAIN_DB_PASSWORD:-}" ]]; then
