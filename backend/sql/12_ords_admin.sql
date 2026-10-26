@@ -38,8 +38,11 @@ begin
   endpoint('roles/:id',         'POST',   'begin usb_admin_api.update_role(:authorization, :id, :body_text); end;');
   endpoint('roles/:id',         'DELETE', 'begin usb_admin_api.delete_role(:authorization, :id); end;');
 
-  -- CORS: solo el servidor de desarrollo de la app web (Kotlin/Wasm) puede llamar desde el navegador.
-  ords.set_module_origins_allowed(p_module_name => c_module, p_origins_allowed => 'http://localhost:8081');
+  -- CORS: orígenes web que pueden llamar a la API desde el navegador:
+  --   http://localhost:8081                     servidor de desarrollo (Kotlin/Wasm)
+  --   https://usbrainwebprototipo.onrender.com  frontend de stage en Render (ver STAGE.md)
+  ords.set_module_origins_allowed(p_module_name => c_module,
+    p_origins_allowed => 'http://localhost:8081,https://usbrainwebprototipo.onrender.com');
 
   commit;
 end;

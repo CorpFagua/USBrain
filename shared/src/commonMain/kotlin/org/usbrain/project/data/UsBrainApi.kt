@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
@@ -51,6 +52,11 @@ class UsBrainApi(
             requestTimeoutMillis = 20_000
             connectTimeoutMillis = 10_000
         }
+        defaultRequest {
+            // Stage por ngrok gratuito: sin este encabezado, ngrok responde a los navegadores con
+            // una página de aviso en vez de la API. En local no tiene efecto (ORDS lo ignora).
+            header("ngrok-skip-browser-warning", "true")
+        }
     }
 
     private var accessToken: String? = null
@@ -73,6 +79,21 @@ class UsBrainApi(
                     put("password", password)
                     put("device_id", deviceId)
                     put("device_name", deviceName)
+                })
+            }
+        }
+
+    suspend fun changeInitialPassword(
+        challengeId: String,
+        currentPassword: String,
+        newPassword: String,
+    ): LoginResponse =
+        send<LoginResponse> {
+            post(url("auth/password/first-login")) {
+                json(buildJsonObject {
+                    put("challenge_id", challengeId)
+                    put("current_password", currentPassword)
+                    put("new_password", newPassword)
                 })
             }
         }

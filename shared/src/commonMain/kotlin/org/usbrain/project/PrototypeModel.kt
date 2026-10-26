@@ -124,7 +124,7 @@ data class WidgetEntry(
 enum class Screen {
     // SPLASH: restaurando la sesión guardada al abrir la app. RECOVERY_CODES: se muestran
     // una sola vez, justo después de enrolar el autenticador.
-    SPLASH, LOGIN, TWO_FACTOR, RECOVERY_CODES, FORGOT_PASSWORD,
+    SPLASH, LOGIN, FIRST_PASSWORD_CHANGE, TWO_FACTOR, RECOVERY_CODES, FORGOT_PASSWORD,
     // Bloqueo estilo banco: crear el PIN, ofrecer biometría y la pantalla de desbloqueo.
     PIN_SETUP, BIOMETRIC_OFFER, LOCK,
     // PATIENT_HOME es solo "tareas de hoy". PATIENT_BEHAVIORS es la pestaña "Historial": lista
@@ -140,6 +140,69 @@ enum class Screen {
     THERAPIST_HOME, THERAPIST_PATIENT, THERAPIST_PATIENT_INFO, THERAPIST_BEHAVIOR, THERAPIST_TASK_DETAIL,
     THERAPIST_NEW_BEHAVIOR, THERAPIST_BASELINE_SETUP, THERAPIST_NEW_TASK, THERAPIST_NEW_WIDGET, THERAPIST_ASSIGNED, THERAPIST_PROFILE,
     ADMIN_HOME, ADMIN_USERS, ADMIN_USER_EDIT, ADMIN_ROLES, ADMIN_ROLE_EDIT, ADMIN_PROFILE,
+}
+
+data class PasswordAssessment(
+    val score: Int,
+    val label: String,
+    val isValid: Boolean,
+    val message: String?,
+)
+
+fun passwordCharacterCount(password: String): Int {
+    var count = 0
+    var index = 0
+    while (index < password.length) {
+        val character = password[index]
+        if (character.code in 0xD800..0xDBFF &&
+            index + 1 < password.length &&
+            password[index + 1].code in 0xDC00..0xDFFF
+        ) {
+            index++
+        }
+        count++
+        index++
+    }
+    return count
+}
+
+fun assessPassword(password: String, email: String, exactLength: Boolean = false): PasswordAssessment {
+    if (password.isEmpty()) return PasswordAssessment(0, "Sin evaluar", false, null)
+    val passwordLength = passwordCharacterCount(password)
+    val characterGroups = listOf(
+        password.any(Char::isLowerCase),
+        password.any(Char::isUpperCase),
+        password.any(Char::isDigit),
+        password.any { !it.isLetterOrDigit() },
+    ).count { it }
+    val localPart = email.substringBefore('@')
+    val containsEmailName = passwordCharacterCount(localPart) >= 4 &&
+        password.contains(localPart, ignoreCase = true)
+    val score = if (exactLength) {
+        characterGroups.coerceAtMost(4)
+    } else {
+        (
+            (if (passwordLength >= 10) 1 else 0) +
+                (if (passwordLength >= 14) 1 else 0) +
+                (if (characterGroups >= 3) 1 else 0) +
+                (if (characterGroups == 4) 1 else 0)
+            ).coerceAtMost(4)
+    }
+    val message = when {
+        exactLength && passwordLength != 10 -> "La contraseña debe tener exactamente 10 caracteres."
+        passwordLength < 10 -> "Usa al menos 10 caracteres."
+        passwordLength > 128 -> "No puede superar 128 caracteres."
+        characterGroups < 3 -> "Combina al menos 3: mayúsculas, minúsculas, números y símbolos."
+        containsEmailName -> "No incluyas tu nombre de usuario del correo."
+        else -> null
+    }
+    val label = when (score) {
+        0, 1 -> "Débil"
+        2 -> "Aceptable"
+        3 -> "Buena"
+        else -> "Fuerte"
+    }
+    return PasswordAssessment(score, label, message == null, message)
 }
 
 /** Pestañas dentro del detalle de una conducta: separan "gestionar actividades" de "ver la
@@ -401,6 +464,8 @@ class PrototypeState(
     var sessionUser by mutableStateOf<SessionUser?>(null)
     var loginEmail by mutableStateOf("")
     var loginPassword by mutableStateOf("")
+    var firstPassword by mutableStateOf("")
+    var firstPasswordConfirmation by mutableStateOf("")
     var authError by mutableStateOf<String?>(null)
     var challengeId by mutableStateOf<String?>(null)
     var enrollment by mutableStateOf<Enrollment?>(null)
@@ -673,8 +738,39 @@ class PrototypeState(
             enrollment = response.enrollment
             mfaCode = ""
             useRecoveryCode = false
-            loginPassword = ""
-            screen = Screen.TWO_FACTOR
+            if (response.status == "password_change_required") {
+                firstPassword = ""
+                firstPasswordConfirmation = ""
+                screen = Screen.FIRST_PASSWORD_CHANGE
+            } else {
+                loginPassword = ""
+                screen = Screen.TWO_FACTOR
+            }
+        }
+    }
+
+    fun submitFirstPasswordChange() {
+        val challenge = challengeId ?: return
+        authError = null
+        val assessment = assessPassword(firstPassword, loginEmail, exactLength = true)
+        when {
+            !assessment.isValid -> authError = assessment.message ?: "La contraseña no cumple los requisitos."
+            firstPassword == loginPassword -> authError = "La nueva contraseña debe ser distinta de la temporal."
+            firstPassword != firstPasswordConfirmation -> authError = "Las contraseñas no coinciden."
+            else -> launch({ message ->
+                authError = message
+                if (message.contains("expiró", ignoreCase = true)) cancelLogin(message)
+            }) {
+                val response = api.changeInitialPassword(challenge, loginPassword, firstPassword)
+                challengeId = response.challengeId
+                enrollment = response.enrollment
+                loginPassword = ""
+                firstPassword = ""
+                firstPasswordConfirmation = ""
+                mfaCode = ""
+                useRecoveryCode = false
+                screen = Screen.TWO_FACTOR
+            }
         }
     }
 
@@ -719,6 +815,9 @@ class PrototypeState(
     fun cancelLogin(message: String? = null) {
         challengeId = null
         enrollment = null
+        loginPassword = ""
+        firstPassword = ""
+        firstPasswordConfirmation = ""
         mfaCode = ""
         authError = message
         screen = Screen.LOGIN
@@ -807,10 +906,11 @@ class PrototypeState(
         val resetId = forgotResetId ?: return
         authError = null
         val code = forgotCode.filter { !it.isWhitespace() }
+        val passwordAssessment = assessPassword(forgotNewPassword, forgotEmail, exactLength = true)
         when {
             forgotUseRecovery && code.length < 10 -> authError = "Escribe el código de recuperación completo."
             !forgotUseRecovery && code.length != 6 -> authError = "El código tiene 6 dígitos."
-            forgotNewPassword.length < 10 -> authError = "La contraseña debe tener al menos 10 caracteres."
+            !passwordAssessment.isValid -> authError = passwordAssessment.message ?: "La contraseña no cumple los requisitos."
             forgotNewPassword != forgotConfirmPassword -> authError = "Las contraseñas no coinciden."
             else -> launch({ message -> authError = message; forgotCode = "" }) {
                 try {
@@ -1053,6 +1153,13 @@ class PrototypeState(
         adminError = null
         val editing = editingUserId
         val isPatientRole = draftRoleProfileOf(draftUserRole) == "PATIENT"
+        if (editing == null) {
+            val assessment = assessPassword(draftUserPassword, draftUserEmail)
+            if (!assessment.isValid) {
+                adminError = assessment.message ?: "La contraseña temporal no cumple los requisitos."
+                return
+            }
+        }
         launch({ adminError = it }) {
             if (editing == null) {
                 api.adminCreateUser(buildJsonObject {
@@ -1087,6 +1194,14 @@ class PrototypeState(
         val id = editingUserId ?: return
         adminError = null
         adminInfo = null
+        if (action == "set_password") {
+            val email = adminData?.users?.firstOrNull { it.id == id }?.email.orEmpty()
+            val assessment = assessPassword(draftActionPassword, email)
+            if (!assessment.isValid) {
+                adminError = assessment.message ?: "La contraseña temporal no cumple los requisitos."
+                return
+            }
+        }
         launch({ adminError = it }) {
             api.adminUserAction(id, action, draftActionPassword.takeIf { action == "set_password" })
             draftActionPassword = ""

@@ -98,7 +98,15 @@ check(status == 200 and [s["current"] for s in body["items"]] == [True], "solo q
 status, body = call("POST", "/auth/password", {"current_password": PASSWORD, "new_password": "corta", "code": "000000"}, phone["access_token"])
 check(status == 403 and body["error"] == "invalid_code", "cambio de contraseña exige código 2FA")
 wait_next_step()
-new_password = PASSWORD + "-nueva"
+for invalid_length_password in ("Abcdef1!X", "Abcdef1!Xyz"):
+    status, body = call("POST", "/auth/password", {
+        "current_password": PASSWORD,
+        "new_password": invalid_length_password,
+        "code": totp(secret),
+    }, phone["access_token"])
+    check(status == 400 and body["error"] == "weak_password",
+          "cambio autenticado rechaza contraseña con longitud distinta de 10")
+new_password = "Abcdef1!Xy"
 status, body = call("POST", "/auth/password", {"current_password": PASSWORD, "new_password": new_password, "code": totp(secret)}, phone["access_token"])
 check(status == 200, "cambio de contraseña con contraseña actual + 2FA")
 status, body = login(PATIENT, TABLET)

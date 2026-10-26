@@ -29,6 +29,7 @@ begin
                      p_comments => 'Login con contraseña + TOTP, sesiones persistentes por dispositivo.');
 
   endpoint('login',        'POST',   'begin usb_api.login(:body_text); end;');
+  endpoint('password/first-login', 'POST', 'begin usb_api.change_initial_password(:body_text); end;');
   endpoint('mfa/verify',   'POST',   'begin usb_api.verify_mfa(:body_text); end;');
   endpoint('mfa/recovery', 'POST',   'begin usb_api.verify_recovery_code(:body_text); end;');
   endpoint('refresh',      'POST',   'begin usb_api.refresh(:body_text); end;');
@@ -41,8 +42,11 @@ begin
   endpoint('password/forgot', 'POST', 'begin usb_api.forgot_password(:body_text); end;');
   endpoint('password/reset',  'POST', 'begin usb_api.reset_password(:body_text); end;');
 
-  -- CORS: solo el servidor de desarrollo de la app web (Kotlin/Wasm) puede llamar desde el navegador.
-  ords.set_module_origins_allowed(p_module_name => c_module, p_origins_allowed => 'http://localhost:8081');
+  -- CORS: orígenes web que pueden llamar a la API desde el navegador:
+  --   http://localhost:8081                     servidor de desarrollo (Kotlin/Wasm)
+  --   https://usbrainwebprototipo.onrender.com  frontend de stage en Render (ver STAGE.md)
+  ords.set_module_origins_allowed(p_module_name => c_module,
+    p_origins_allowed => 'http://localhost:8081,https://usbrainwebprototipo.onrender.com');
 
   commit;
 end;

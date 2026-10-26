@@ -252,3 +252,5 @@ docker compose down -v             # BORRAR la base por completo (vuelve a empez
 ```
 
 Más detalle del backend (API, seguridad, roles) en [`backend/README.md`](backend/README.md).
+Para publicar la web en Render usando el Docker de un computador como backend (entorno *stage*,
+con ngrok), ver [`STAGE.md`](STAGE.md).

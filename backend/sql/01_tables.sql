@@ -166,6 +166,7 @@ create table if not exists usb_users (
   password_salt       raw(16)       not null,
   password_iterations number(10)    not null,
   password_changed_at timestamp with time zone default systimestamp not null,
+  must_change_password boolean default false not null,
   failed_logins       number(5)     default 0 not null,
   locked_until        timestamp with time zone,
   mfa_enabled         boolean       default false not null,
@@ -193,7 +194,7 @@ create table if not exists usb_login_challenges (
   created_at         timestamp with time zone default systimestamp not null,
   expires_at         timestamp with time zone not null,
   consumed_at        timestamp with time zone,
-  constraint usb_challenges_purpose_ck check (purpose in ('MFA', 'ENROLL', 'RESET'))
+  constraint usb_challenges_purpose_ck check (purpose in ('MFA', 'ENROLL', 'RESET', 'CHANGE'))
 );
 create index if not exists usb_challenges_user_ix on usb_login_challenges (user_id);
 
@@ -215,10 +216,12 @@ begin
          'alter table usb_users modify (role varchar2(40))');
   ddl_if(q'[select 1 - count(*) from user_constraints where constraint_name = 'USB_USERS_ROLE_FK']',
          'alter table usb_users add constraint usb_users_role_fk foreign key (role) references usb_roles');
-  ddl_if(q'[select count(*) from user_constraints where constraint_name = 'USB_CHALLENGES_PURPOSE_CK' and search_condition_vc not like '%RESET%']',
+  ddl_if(q'[select 1 - count(*) from user_tab_columns where table_name = 'USB_USERS' and column_name = 'MUST_CHANGE_PASSWORD']',
+         'alter table usb_users add (must_change_password boolean default false not null)');
+  ddl_if(q'[select count(*) from user_constraints where constraint_name = 'USB_CHALLENGES_PURPOSE_CK' and search_condition_vc not like '%CHANGE%']',
          'alter table usb_login_challenges drop constraint usb_challenges_purpose_ck');
   ddl_if(q'[select 1 - count(*) from user_constraints where constraint_name = 'USB_CHALLENGES_PURPOSE_CK']',
-         q'[alter table usb_login_challenges add constraint usb_challenges_purpose_ck check (purpose in ('MFA', 'ENROLL', 'RESET'))]');
+         q'[alter table usb_login_challenges add constraint usb_challenges_purpose_ck check (purpose in ('MFA', 'ENROLL', 'RESET', 'CHANGE'))]');
 end;
 /
 

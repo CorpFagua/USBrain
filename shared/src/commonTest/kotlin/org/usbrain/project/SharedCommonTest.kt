@@ -127,4 +127,24 @@ class SharedCommonTest {
         assertEquals(0.1, first.valueForChart())
         assertEquals(first.valueForChart(), second.valueForChart())
     }
+
+    @Test
+    fun passwordAssessmentMatchesBackendPolicy() {
+        assertTrue(assessPassword("Seguro-Mixto-123", "persona@usb.edu.co").isValid)
+        assertFalse(assessPassword("corta", "persona@usb.edu.co").isValid)
+        assertFalse(assessPassword("abcdefghij", "persona@usb.edu.co").isValid)
+        assertFalse(assessPassword("Persona-Segura-123", "persona@usb.edu.co").isValid)
+        assertFalse(assessPassword("A".repeat(129) + "a1!", "persona@usb.edu.co").isValid)
+    }
+
+    @Test
+    fun firstLoginPasswordMustBeExactlyTenCharacters() {
+        assertTrue(assessPassword("Abcdef1!Xy", "persona@usb.edu.co", exactLength = true).isValid)
+        assertFalse(assessPassword("Abcdef1!X", "persona@usb.edu.co", exactLength = true).isValid)
+        assertFalse(assessPassword("Abcdef1!Xyz", "persona@usb.edu.co", exactLength = true).isValid)
+        assertEquals(10, passwordCharacterCount("Abcdef1!X😀"))
+        assertTrue(assessPassword("Abcdef1!X😀", "persona@usb.edu.co", exactLength = true).isValid)
+        assertFalse(assessPassword("Abcdef1!😀", "persona@usb.edu.co", exactLength = true).isValid)
+        assertFalse(assessPassword("Abcdef1!Xy😀", "persona@usb.edu.co", exactLength = true).isValid)
+    }
 }

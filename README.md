@@ -30,7 +30,8 @@ login con 2FA, sesión persistente y todos los datos clínicos se leen y guardan
 ### Datos de prueba
 
 Se cargan con `backend/scripts/install.sh --seed`. Contraseña de todos: `DEV_SEED_PASSWORD` en
-`backend/.env`. El primer ingreso de cada cuenta pide enrolar Google o Microsoft Authenticator.
+`backend/.env`. En cuentas recién creadas, el primer ingreso exige reemplazar esa contraseña
+temporal antes de enrolar Google o Microsoft Authenticator.
 
 - Terapeuta: `e.patino@usb.edu.co` — José E. Patiño (tiene asignados a Ana y Daniel).
 - Paciente: `ana.torres@usbbog.edu.co` — Ana Torres, ansiedad social, caso único con conductas adaptativas y desadaptativas.
@@ -175,6 +176,7 @@ conducta se puede leer sin confundir una sesión más larga con un empeoramiento
 
 > **¿Primera vez?** Sigue la [guía de instalación](INSTALACION.md): cubre desde cero con Docker y
 > también si ya tienes Oracle/APEX instalado.
+> **Stage (Render + ngrok):** [STAGE.md](STAGE.md).
 
 Primero el backend (una vez por sesión de trabajo):
 

@@ -34,6 +34,16 @@ usuarios de prueba (`DEV_SEED_PASSWORD`). La contraseña de SYS se lee del propi
 
 Usuarios de demostración (`--seed`, solo desarrollo), todos con la contraseña `DEV_SEED_PASSWORD`:
 
+Las cuentas creadas por administración y las contraseñas restablecidas por el administrador son
+temporales: en el primer login se debe cambiar la contraseña antes de configurar o verificar el
+2FA. Toda contraseña nueva elegida por el usuario —cambio inicial, cambio autenticado o
+recuperación— debe tener exactamente 10 caracteres, incluir al menos 3 de estos grupos
+(mayúsculas, minúsculas, números y símbolos) y no contener el nombre de usuario del correo.
+Las contraseñas temporales asignadas por administración conservan el límite general de 10–128
+caracteres.
+El cambio se verifica con un desafío de un solo uso ligado al dispositivo y la contraseña
+temporal; no crea una sesión hasta completar después el flujo normal de 2FA.
+
 | Correo | Rol | Datos |
 |---|---|---|
 | `e.patino@usb.edu.co` | Terapeuta | Tiene asignados a Ana y Daniel |
@@ -88,8 +98,10 @@ quede en git y se pueda reconstruir la base desde cero.
 App                                   API
  │ POST /auth/login {email,password,device_id}
  │ ────────────────────────────────▶ contraseña OK
- │ ◀──── status=mfa_enrollment_required + QR      (primera vez)
- │ ◀──── status=mfa_required                      (siguientes)
+ │ ◀──── status=password_change_required          (usuario/clave temporal)
+ │ POST /auth/password/first-login {challenge_id,current_password,new_password}
+ │ ◀──── status=mfa_enrollment_required + QR      (después de cambiarla)
+ │ ◀──── status=mfa_required                      (cuentas ya enroladas)
  │ POST /auth/mfa/verify {challenge_id, code}
  │ ────────────────────────────────▶ TOTP OK
  │ ◀──── access_token (10 min) + refresh_token (+ 10 códigos de recuperación si enroló)
@@ -104,7 +116,8 @@ App                                   API
 
 | Método | Ruta | Auth | Cuerpo | Respuesta |
 |---|---|---|---|---|
-| POST | `login` | — | `email`, `password`, `device_id`, `device_name` | `status` (`mfa_required` \| `mfa_enrollment_required`), `challenge_id`, `expires_in`; si enrola: `enrollment.{secret, otpauth_uri, issuer, account}` |
+| POST | `login` | — | `email`, `password`, `device_id`, `device_name` | `status` (`password_change_required` \| `mfa_required` \| `mfa_enrollment_required`), `challenge_id`, `expires_in`; si enrola: `enrollment.{secret, otpauth_uri, issuer, account}` |
+| POST | `password/first-login` | desafío ligado al dispositivo | `challenge_id`, `current_password`, `new_password` | Guarda la contraseña y devuelve el desafío del flujo MFA (nunca emite sesión) |
 | POST | `mfa/verify` | — | `challenge_id`, `code` | Tokens + `user`; al enrolar también `recovery_codes` (10, se muestran una sola vez) |
 | POST | `mfa/recovery` | — | `challenge_id`, `recovery_code` | Tokens + `user` + `recovery_codes_remaining` |
 | POST | `refresh` | — | `refresh_token`, `device_id` | Tokens nuevos + `user` |
@@ -228,7 +241,10 @@ de login. Sin teléfono ni códigos de recuperación, el administrador usa `rese
 
 - **Contraseñas**: PBKDF2-HMAC-SHA256, sal de 16 bytes, 310.000 iteraciones (~0,6 s). Si se
   suben las iteraciones en la configuración, cada contraseña se re-hashea en su siguiente login.
-  Mínimo 10 caracteres y sin el usuario del correo.
+  Las contraseñas temporales asignadas por administración admiten 10–128 caracteres. Toda
+  contraseña nueva elegida por el usuario (primer ingreso, cambio autenticado o recuperación)
+  exige exactamente 10 caracteres, al menos 3 grupos (mayúsculas, minúsculas, números y símbolos)
+  y no incluir el usuario del correo.
 - **TOTP**: secreto de 160 bits cifrado con AES-256 en reposo; ventana de ±30 s; un código ya
   usado se rechaza (anti-replay). 10 códigos de recuperación de 50 bits, guardados con HMAC.
 - **Tokens**: 256 bits aleatorios, solo se guarda su SHA-256. Los prefijos `usb_at_`/`usb_rt_`/

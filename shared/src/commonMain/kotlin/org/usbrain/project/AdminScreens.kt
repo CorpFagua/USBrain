@@ -26,6 +26,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.usbrain.project.data.AdminRoleDto
@@ -188,11 +193,15 @@ private fun UserRow(user: AdminUserDto, enabled: Boolean, onClick: () -> Unit) {
 
 @Composable
 internal fun AdminUserEditScreen(state: PrototypeState) {
+    var initialPasswordVisible by remember { mutableStateOf(false) }
+    var actionPasswordVisible by remember { mutableStateOf(false) }
     val data = state.adminData
     val editing = state.editingUserId
     val user = data?.users?.firstOrNull { it.id == editing }
     val roles = data?.roles.orEmpty()
     val isPatientRole = state.draftRoleProfileOf(state.draftUserRole) == "PATIENT"
+    val initialPasswordAssessment = assessPassword(state.draftUserPassword, state.draftUserEmail)
+    val actionPasswordAssessment = assessPassword(state.draftActionPassword, user?.email.orEmpty())
     val canCreateSuperAdmin = state.sessionUser?.role == "SUPERADMIN"
     ScreenScaffold {
         BackHeader(if (editing == null) "Nuevo usuario" else "Editar usuario") { state.screen = Screen.ADMIN_USERS }
@@ -240,11 +249,24 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
         if (editing == null) {
             OutlinedTextField(
                 state.draftUserPassword, { state.draftUserPassword = it }, Modifier.fillMaxWidth(),
-                label = { Text("Contraseña inicial (mínimo 10 caracteres)") }, singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
+                label = { Text("Contraseña temporal") }, singleLine = true,
+                visualTransformation = if (initialPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    PasswordVisibilityToggle(initialPasswordVisible) {
+                        initialPasswordVisible = !initialPasswordVisible
+                    }
+                },
             )
+            PasswordStrengthIndicator(initialPasswordAssessment)
+            if (state.draftUserPassword.isNotEmpty() && !initialPasswordAssessment.isValid) {
+                Text(
+                    initialPasswordAssessment.message.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             Text(
-                "En su primer ingreso configurará su app autenticadora (2FA) y su PIN.",
+                "En su primer ingreso deberá cambiar esta contraseña antes de configurar 2FA. Comparte la contraseña temporal por un canal seguro.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -256,7 +278,11 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
             }
         }
         AdminMessages(state)
-        Button(onClick = { state.saveUser() }, Modifier.fillMaxWidth().height(50.dp), enabled = !state.busy) {
+        Button(
+            onClick = { state.saveUser() },
+            Modifier.fillMaxWidth().height(50.dp),
+            enabled = !state.busy && (editing != null || initialPasswordAssessment.isValid),
+        ) {
             Text(if (editing == null) "Crear usuario" else "Guardar cambios")
         }
         if (user != null) {
@@ -270,12 +296,25 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
             OutlinedTextField(
                 state.draftActionPassword, { state.draftActionPassword = it }, Modifier.fillMaxWidth(),
                 label = { Text("Nueva contraseña temporal") }, singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
+                visualTransformation = if (actionPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    PasswordVisibilityToggle(actionPasswordVisible) {
+                        actionPasswordVisible = !actionPasswordVisible
+                    }
+                },
             )
+            PasswordStrengthIndicator(actionPasswordAssessment)
+            if (state.draftActionPassword.isNotEmpty() && !actionPasswordAssessment.isValid) {
+                Text(
+                    actionPasswordAssessment.message.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             OutlinedButton(
                 onClick = { state.userAction("set_password") },
                 Modifier.fillMaxWidth(),
-                enabled = state.draftActionPassword.length >= 10,
+                enabled = actionPasswordAssessment.isValid,
             ) { Text("Restablecer contraseña") }
         }
         Spacer(Modifier.height(24.dp))
