@@ -77,7 +77,7 @@ quede en git y se pueda reconstruir la base desde cero.
 | Archivo | Contenido |
 |---|---|
 | `sql/00_schema.sql` | (SYS) Usuario `USBRAIN`, privilegios mínimos, habilitación en ORDS |
-| `sql/01_tables.sql` | Usuarios, desafíos 2FA, sesiones, tokens, códigos de recuperación, bitácora, configuración |
+| `sql/01_tables.sql` | Usuarios, roles, permisos y excepciones por usuario (vista `usb_effective_permissions`), desafíos 2FA, sesiones, tokens, códigos de recuperación, bitácora, configuración |
 | `sql/02_usb_crypto.sql` | PBKDF2-HMAC-SHA256, TOTP (RFC 6238), Base32, tokens aleatorios, AES-256 |
 | `sql/03_usb_auth.sql` | Lógica: login, 2FA, enrolamiento, recuperación, refresh, sesiones, bloqueo, administración |
 | `sql/04_usb_api.sql` | Adaptador HTTP: JSON ↔ PL/SQL, errores → códigos HTTP |
@@ -86,7 +86,7 @@ quede en git y se pueda reconstruir la base desde cero.
 | `sql/07_usb_domain.sql` | Lógica clínica: bootstrap por rol y cada acción de las pantallas, con control de acceso |
 | `sql/08_usb_app_api.sql` | Adaptador HTTP de la API clínica |
 | `sql/09_ords_app.sql` | Publica `/v1/app/…` en ORDS |
-| `sql/10_usb_admin.sql` | Administración: usuarios, roles y permisos, con las reglas anti-escalada |
+| `sql/10_usb_admin.sql` | Administración: usuarios, roles, permisos y permisos individuales (`POST /v1/admin/users/:id/permissions`), con las reglas anti-escalada |
 | `sql/11_usb_admin_api.sql` | Adaptador HTTP de la administración |
 | `sql/12_ords_admin.sql` | Publica `/v1/admin/…` en ORDS |
 | `sql/80_apex_workspace.sql` | (SYS, `--seed`) Workspace APEX `USBRAIN` con el usuario `dev` (no cambia su contraseña si ya existe) |
@@ -261,13 +261,47 @@ de login. Sin teléfono ni códigos de recuperación, el administrador usa `rese
 
 | Clave | Valor | Significado |
 |---|---|---|
-| `ACCESS_TTL_SECONDS` | 600 | Vida del access token |
-| `REFRESH_IDLE_DAYS` | 30 | Días sin abrir la app antes de pedir login + 2FA |
+| `ACCESS_TTL_SECONDS` | 600 | Vida del access token (la app lo renueva sola) |
+| `REFRESH_IDLE_DAYS` | 30 | Días sin abrir la app antes de pedir login + 2FA (inactividad) |
 | `SESSION_ABSOLUTE_DAYS` | 90 | Vida máxima de una sesión aunque se use a diario |
-| `MAX_SESSIONS_PER_USER` | 5 | Dispositivos simultáneos |
+| `MAX_SESSIONS_PER_USER` | 1 | Sesiones activas por usuario. Con 1, entrar en otro dispositivo, navegador o pestaña cierra la sesión anterior, y esa sesión ve "se inició sesión con tu cuenta en otro dispositivo" |
 | `MAX_FAILED_LOGINS` / `LOCKOUT_MINUTES` | 5 / 15 | Bloqueo |
 | `CHALLENGE_TTL_SECONDS` / `CHALLENGE_MAX_ATTEMPTS` | 300 / 5 | Tiempo e intentos para el código 2FA |
 | `PBKDF2_ITERATIONS` | 310000 | Costo del hash |
+
+#### Cambiar un valor desde APEX
+
+Los cambios aplican **de inmediato**, sin reinstalar ni reiniciar nada. `install.sh` **no**
+sobrescribe estos valores (solo crea las claves que falten), así que lo que cambies en APEX se conserva.
+
+1. Abre `http://localhost:8080/ords/apex` → Workspace `USBRAIN`, usuario `dev`, contraseña
+   `APEX_DEV_PASSWORD` de `backend/.env`.
+2. **Opción visual:** *SQL Workshop* → **Object Browser** → tabla `USB_AUTH_CONFIG` → pestaña
+   **Data** → clic en el lápiz de la fila → cambia `CONFIG_VALUE` → **Apply Changes**.
+3. **Opción SQL:** *SQL Workshop* → **SQL Commands**, pega y ejecuta (**Run**):
+   ```sql
+   update usb_auth_config set config_value = '1' where config_key = 'MAX_SESSIONS_PER_USER';
+   commit;
+   ```
+4. Para revisar los valores actuales: `select * from usb_auth_config order by config_key;`
+
+Cuándo aplica cada cambio:
+- `MAX_SESSIONS_PER_USER`, `MAX_FAILED_LOGINS`, `LOCKOUT_MINUTES`, `CHALLENGE_*`: desde el
+  siguiente login.
+- `ACCESS_TTL_SECONDS` y `REFRESH_IDLE_DAYS`: para los tokens que se emitan desde ese momento
+  (los ya entregados conservan su vencimiento).
+- `PBKDF2_ITERATIONS`: cada contraseña se re-hashea sola en el siguiente login correcto.
+
+### Reglas de entrada y cambio de contraseña
+
+- **Correo:** solo letras, números, `@` y `.` (los correos los crea la administración). El login,
+  "olvidé mi contraseña" y la creación de usuarios rechazan cualquier otro carácter con
+  400 `invalid_email`, y el campo de la app ni siquiera deja escribirlos. Un intento de login
+  con un correo inválido queda en la bitácora como `LOGIN_INVALID_EMAIL`.
+- **Cambio de contraseña desde el perfil** (todos los perfiles: *Perfil → Seguridad →
+  Contraseña → Cambiar*): exige la contraseña actual **y** el código de la app autenticadora,
+  aplica la misma política que el primer ingreso, cuenta los fallos para el bloqueo, cierra la
+  sesión en los demás dispositivos y queda en la bitácora (`PASSWORD_CHANGED`).
 
 ### Administración (SQL o APEX)
 

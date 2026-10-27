@@ -92,8 +92,8 @@ create or replace package body usb_domain as
     return trim(p_value);
   end require_text;
 
-  -- Permisos: el código revisa PERMISOS (usb_role_permissions), nunca nombres de rol,
-  -- así un rol nuevo creado por el super administrador funciona sin tocar código.
+  -- Permisos: el código revisa PERMISOS efectivos (rol + excepciones del usuario), nunca
+  -- nombres de rol, así un rol nuevo creado por el super administrador funciona sin tocar código.
   function flag(p_permission varchar2) return number is
   begin
     return case when usb_auth.has_permission(p_permission) then 1 else 0 end;
@@ -185,8 +185,8 @@ create or replace package body usb_domain as
           'id' value to_char(u.user_id), 'email' value u.email,
           'full_name' value u.full_name, 'role' value u.role,
           'role_name' value r.name, 'profile' value r.app_profile,
-          'permissions' value (select json_arrayagg(rp.permission_id order by rp.permission_id returning json)
-                                 from usb_role_permissions rp where rp.role_id = u.role)),
+          'permissions' value (select json_arrayagg(ep.permission_id order by ep.permission_id returning json)
+                                 from usb_effective_permissions ep where ep.user_id = u.user_id)),
         'patients' value (
           select json_arrayagg(
             json_object(
@@ -733,8 +733,8 @@ create or replace package body usb_domain as
     -- Terapeuta = cualquier usuario cuyo rol puede ver pacientes asignados.
     select u.user_id into l_id from usb_users u join usb_roles r on r.role_id = u.role
      where u.email = lower(trim(p_email)) and r.app_profile = 'THERAPIST'
-       and exists (select 1 from usb_role_permissions rp
-                    where rp.role_id = u.role and rp.permission_id = 'case.view.assigned');
+       and exists (select 1 from usb_effective_permissions ep
+                    where ep.user_id = u.user_id and ep.permission_id = 'case.view.assigned');
     return l_id;
   exception
     when no_data_found then

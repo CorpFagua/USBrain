@@ -165,7 +165,7 @@ internal fun ForgotPasswordScreen(state: PrototypeState) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             OutlinedTextField(
-                state.forgotEmail, { state.forgotEmail = it.trim() }, Modifier.fillMaxWidth(),
+                state.forgotEmail, { state.forgotEmail = sanitizeEmailInput(it) }, Modifier.fillMaxWidth(),
                 label = { Text("Correo institucional") }, singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
             )
@@ -410,38 +410,135 @@ internal fun LockScreen(state: PrototypeState) {
 
 @Composable
 internal fun SecuritySettingsCard(state: PrototypeState) {
-    if (!supportsAppLock) return
     SectionLabel("Seguridad")
+    state.changeInfo?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = LocalUsBrainSemantic.current.success)
+    }
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("PIN de acceso", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Contraseña", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                     Text(
-                        "Se pide al abrir la app y tras ${AppLock.LOCK_AFTER_SECONDS} s en segundo plano.",
+                        "Pide tu contraseña actual y el código de tu app autenticadora.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                TextButton(onClick = { state.startPinSetup(changing = true) }) { Text("Cambiar") }
+                TextButton(onClick = { state.startPasswordChange() }) { Text("Cambiar") }
             }
-            if (state.biometricAvailable) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Huella o rostro", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "Desbloquea sin escribir el PIN.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = state.biometricEnabled,
-                        onCheckedChange = { on -> if (on) state.enableBiometric(fromOnboarding = false) else state.disableBiometric() },
-                    )
-                }
-            }
+            if (supportsAppLock) PinSettingsRows(state)
             InfoRow("Verificación en dos pasos", "Activada ✓")
         }
+    }
+}
+
+@Composable
+private fun PinSettingsRows(state: PrototypeState) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("PIN de acceso", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Se pide al abrir la app y tras ${AppLock.LOCK_AFTER_SECONDS} s en segundo plano.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        TextButton(onClick = { state.startPinSetup(changing = true) }) { Text("Cambiar") }
+    }
+    if (state.biometricAvailable) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Huella o rostro", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Desbloquea sin escribir el PIN.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = state.biometricEnabled,
+                onCheckedChange = { on -> if (on) state.enableBiometric(fromOnboarding = false) else state.disableBiometric() },
+            )
+        }
+    }
+}
+
+/* ----------------------------- cambio de contraseña (perfil) ----------------------------- */
+
+@Composable
+internal fun ChangePasswordScreen(state: PrototypeState) {
+    var currentVisible by remember { mutableStateOf(false) }
+    var newVisible by remember { mutableStateOf(false) }
+    var confirmVisible by remember { mutableStateOf(false) }
+    val assessment = assessPassword(state.changeNewPassword, state.sessionUser?.email.orEmpty(), exactLength = true)
+    val sameAsCurrent = state.changeNewPassword.isNotEmpty() && state.changeNewPassword == state.changeCurrentPassword
+    val mismatch = state.changeConfirmPassword.isNotEmpty() && state.changeNewPassword != state.changeConfirmPassword
+    ScreenScaffold {
+        BackHeader("Cambiar contraseña") { state.closePasswordChange() }
+        Text(
+            "Por seguridad te pedimos tu contraseña actual y el código de tu app autenticadora. " +
+                "Al cambiarla se cierra la sesión en tus otros dispositivos.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+            state.changeCurrentPassword, { state.changeCurrentPassword = it }, Modifier.fillMaxWidth(),
+            label = { Text("Contraseña actual") }, singleLine = true,
+            visualTransformation = if (currentVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            trailingIcon = { PasswordVisibilityToggle(currentVisible) { currentVisible = !currentVisible } },
+        )
+        OutlinedTextField(
+            state.changeNewPassword, { state.changeNewPassword = it }, Modifier.fillMaxWidth(),
+            label = { Text("Nueva contraseña") }, singleLine = true,
+            isError = state.changeNewPassword.isNotEmpty() && (!assessment.isValid || sameAsCurrent),
+            visualTransformation = if (newVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            trailingIcon = { PasswordVisibilityToggle(newVisible) { newVisible = !newVisible } },
+        )
+        Text(
+            "Caracteres: ${passwordCharacterCount(state.changeNewPassword)}/10",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        PasswordStrengthIndicator(assessment)
+        if (state.changeNewPassword.isNotEmpty() && (!assessment.isValid || sameAsCurrent)) {
+            Text(
+                if (sameAsCurrent) "La nueva contraseña debe ser distinta de la actual." else assessment.message.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        OutlinedTextField(
+            state.changeConfirmPassword, { state.changeConfirmPassword = it }, Modifier.fillMaxWidth(),
+            label = { Text("Confirma la nueva contraseña") }, singleLine = true,
+            isError = mismatch,
+            visualTransformation = if (confirmVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            trailingIcon = { PasswordVisibilityToggle(confirmVisible) { confirmVisible = !confirmVisible } },
+        )
+        if (mismatch) {
+            Text("Las contraseñas no coinciden.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        OutlinedTextField(
+            state.changeCode, { state.changeCode = it.filter(Char::isDigit).take(6) }, Modifier.fillMaxWidth(),
+            label = { Text("Código de la app autenticadora") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+        )
+        Text(
+            "Requisitos: exactamente 10 caracteres, al menos 3 tipos de caracteres (mayúsculas, minúsculas, números y símbolos) y no incluir el nombre de usuario del correo.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        state.changeError?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        Button(
+            onClick = { state.submitPasswordChange() },
+            Modifier.fillMaxWidth().height(50.dp),
+            enabled = !state.busy && assessment.isValid && !sameAsCurrent && !mismatch &&
+                state.changeConfirmPassword.isNotEmpty() && state.changeCurrentPassword.isNotEmpty() && state.changeCode.length == 6,
+        ) { Text("Cambiar contraseña") }
     }
 }

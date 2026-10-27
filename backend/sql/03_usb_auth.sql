@@ -24,12 +24,13 @@ create or replace package usb_auth authid definer as
   function current_user_id return number;
   function current_session_id return number;
 
-  -- Permisos (roles dinámicos: usb_roles / usb_role_permissions). El código revisa
-  -- permisos, nunca nombres de rol.
+  -- Permisos efectivos (usb_effective_permissions): los del rol más las excepciones
+  -- vigentes de cada usuario (usb_user_permissions). El código revisa permisos,
+  -- nunca nombres de rol.
   function user_has_permission(p_user_id number, p_permission varchar2) return boolean;
   function has_permission(p_permission varchar2) return boolean;
   procedure require_permission(p_permission varchar2);
-  function permissions_json(p_role_id varchar2) return json_array_t;
+  function permissions_json(p_user_id number) return json_array_t;
 
   -- Administración (desde APEX, SQL o futuros endpoints de administrador).
   function create_user(p_email varchar2, p_full_name varchar2, p_role varchar2,
@@ -81,6 +82,7 @@ create or replace package body usb_auth as
 
   c_recovery_alphabet constant varchar2(32) := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   c_recovery_count    constant pls_integer  := 10;
+  c_email_rule        constant varchar2(100) := 'El correo solo puede tener letras, números, @ y punto.';
 
   g_ip         varchar2(64);
   g_user_agent varchar2(400);
@@ -142,10 +144,19 @@ create or replace package body usb_auth as
       l_json.put('role_name', r.name);
       l_json.put('profile', r.app_profile);
     end loop;
-    l_json.put('permissions', permissions_json(p_user.role));
+    l_json.put('permissions', permissions_json(p_user.user_id));
     l_json.put('mfa_enabled', p_user.mfa_enabled);
     return l_json;
   end user_json;
+
+  -- Los correos los crea la administración, así que basta con letras, números, @ y punto.
+  -- Todo lo demás (comillas, <>, espacios, %…) se rechaza antes de tocar la base, también
+  -- en el login: nada raro llega a las consultas ni a la bitácora.
+  function valid_email(p_email varchar2) return boolean is
+  begin
+    return p_email is not null and lengthb(p_email) <= 254
+       and regexp_like(p_email, '^[a-z0-9]+(\.[a-z0-9]+)*@[a-z0-9]+(\.[a-z0-9]+)+$');
+  end valid_email;
 
   procedure validate_device_id(p_device_id varchar2) is
   begin
@@ -427,8 +438,8 @@ create or replace package body usb_auth as
   begin
     select count(*) into l_count
       from usb_users u
-      join usb_role_permissions rp on rp.role_id = u.role
-     where u.user_id = p_user_id and u.status = 'ACTIVE' and rp.permission_id = p_permission;
+      join usb_effective_permissions ep on ep.user_id = u.user_id
+     where u.user_id = p_user_id and u.status = 'ACTIVE' and ep.permission_id = p_permission;
     return l_count > 0;
   end user_has_permission;
 
@@ -445,10 +456,10 @@ create or replace package body usb_auth as
     end if;
   end require_permission;
 
-  function permissions_json(p_role_id varchar2) return json_array_t is
+  function permissions_json(p_user_id number) return json_array_t is
     l_list json_array_t := json_array_t();
   begin
-    for p in (select permission_id from usb_role_permissions where role_id = p_role_id order by 1) loop
+    for p in (select permission_id from usb_effective_permissions where user_id = p_user_id order by 1) loop
       l_list.append(p.permission_id);
     end loop;
     return l_list;
@@ -460,11 +471,11 @@ create or replace package body usb_auth as
 
   function create_user(p_email varchar2, p_full_name varchar2, p_role varchar2,
                        p_password varchar2) return number is
-    l_email   varchar2(320) := lower(trim(p_email));
+    l_email   varchar2(32767) := lower(trim(p_email));
     l_user_id number;
   begin
-    if l_email is null or not regexp_like(l_email, '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$') then
-      fail(e_bad_request, 'invalid_email', 'El correo no es válido.');
+    if not valid_email(l_email) then
+      fail(e_bad_request, 'invalid_email', c_email_rule);
     end if;
     if trim(p_full_name) is null then
       fail(e_bad_request, 'missing_fields', 'El nombre es obligatorio.');
@@ -536,7 +547,7 @@ create or replace package body usb_auth as
 
   function login(p_email varchar2, p_password varchar2,
                  p_device_id varchar2, p_device_name varchar2) return json_object_t is
-    l_email      varchar2(320) := lower(trim(p_email));
+    l_email      varchar2(32767) := lower(trim(p_email));
     l_user       usb_users%rowtype;
     l_hash       raw(32);
     l_purpose    varchar2(10);
@@ -552,6 +563,10 @@ create or replace package body usb_auth as
       fail(e_bad_request, 'missing_fields', 'Correo y contraseña son obligatorios.');
     end if;
     validate_device_id(p_device_id);
+    if not valid_email(l_email) then
+      audit_event('LOGIN_INVALID_EMAIL', null, null, p_device_id, substr(l_email, 1, 100));
+      fail(e_bad_request, 'invalid_email', c_email_rule);
+    end if;
 
     begin
       select * into l_user from usb_users where email = l_email for update;
@@ -809,6 +824,16 @@ create or replace package body usb_auth as
   -- Sesión persistente
   -- ---------------------------------------------------------------------------
 
+  -- ¿La última sesión cerrada en este dispositivo (último día) la cerró un login nuevo?
+  function replaced_on(p_device_id varchar2) return boolean is
+    l_reason usb_sessions.revoke_reason%type;
+  begin
+    select max(revoke_reason) keep (dense_rank last order by revoked_at) into l_reason
+      from usb_sessions
+     where device_id = p_device_id and revoked_at > systimestamp - interval '1' day;
+    return l_reason in ('SESSION_LIMIT', 'REPLACED');
+  end replaced_on;
+
   function refresh(p_refresh_token varchar2, p_device_id varchar2) return json_object_t is
     l_token   usb_refresh_tokens%rowtype;
     l_session usb_sessions%rowtype;
@@ -826,6 +851,13 @@ create or replace package body usb_auth as
     exception
       when no_data_found then
         audit_event('REFRESH_INVALID', null, null, p_device_id);
+        -- Al revocar una sesión se borran sus tokens; por el dispositivo se sabe si la cerró
+        -- un login en otro lado (una sola sesión por usuario) para avisarle, por si no fue él.
+        if replaced_on(p_device_id) then
+          fail(e_unauthorized, 'session_replaced',
+               'Tu sesión se cerró porque se inició sesión con tu cuenta en otro dispositivo o pestaña. '
+               || 'Si no fuiste tú, cambia tu contraseña.');
+        end if;
         fail(e_unauthorized, 'session_expired', 'Tu sesión expiró. Inicia sesión de nuevo.');
     end;
     select * into l_session from usb_sessions where session_id = l_token.session_id for update;
@@ -1004,7 +1036,8 @@ create or replace package body usb_auth as
   -- ---------------------------------------------------------------------------
 
   function forgot_password(p_email varchar2, p_device_id varchar2, p_device_name varchar2) return json_object_t is
-    l_email  varchar2(320) := lower(trim(p_email));
+    -- Sin límite aquí: un texto enorme se rechaza con valid_email en vez de reventar (500).
+    l_email  varchar2(32767) := lower(trim(p_email));
     l_user   usb_users%rowtype;
     l_found  boolean := true;
     l_token  varchar2(100) := usb_crypto.new_token('usb_rs_');
@@ -1015,6 +1048,9 @@ create or replace package body usb_auth as
       fail(e_bad_request, 'missing_fields', 'Escribe tu correo institucional.');
     end if;
     validate_device_id(p_device_id);
+    if not valid_email(l_email) then
+      fail(e_bad_request, 'invalid_email', c_email_rule);
+    end if;
     begin
       select * into l_user from usb_users where email = l_email for update;
     exception

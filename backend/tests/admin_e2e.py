@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prueba end-to-end de roles dinámicos, administración y olvido de contraseña.
+"""Prueba end-to-end de roles dinámicos, permisos individuales, administración y olvido de contraseña.
 
 Uso:  python3 backend/tests/admin_e2e.py
 
@@ -10,7 +10,7 @@ import datetime
 import time
 
 from support import (E2E_ADMIN, E2E_PATIENT, E2E_SUPERADMIN, E2E_THERAPIST, PASSWORD, call, check,
-                     delete_role, delete_user, enrolled_session, ensure_test_users, login, passed, totp,
+                     delete_role, delete_user, enrolled_session, ensure_test_users, login, passed, sql, totp,
                      wait_next_step)
 
 SUPERVISOR_EMAIL = "e2e.supervisor@usbrain.test"
@@ -34,6 +34,8 @@ for email in (SUPERVISOR_EMAIL, CREATED_THERAPIST, CREATED_PATIENT):
     delete_user(email)
 delete_role(ROLE)
 ensure_test_users()
+sql("delete from usb_user_permissions where user_id in "
+    "(select user_id from usb_users where email like 'e2e.%@usbrain.test');")
 superadmin, _ = enrolled_session(E2E_SUPERADMIN, "e2e-adm-superadmin-01")
 admin, _ = enrolled_session(E2E_ADMIN, "e2e-adm-admin-000001")
 therapist, _ = enrolled_session(E2E_THERAPIST, "e2e-adm-therapist-01")
@@ -190,7 +192,69 @@ check(status == 401, "…cierra sus sesiones para que entre con la interfaz nuev
 status, body = call("DELETE", f"/admin/roles/{ROLE}", token=S)
 check(status == 200, "ahora sí se borra el rol")
 
-print("\n5. Olvido de contraseña (con la app autenticadora)")
+print("\n5. Permisos individuales: a UN usuario, sin cambiar su rol")
+in_a_month = (datetime.date.today() + datetime.timedelta(days=30)).isoformat()
+overrides_url = f"/admin/users/{therapist_id}/permissions"
+grant_all = {"permission": "case.view.all", "effect": "GRANT", "reason": "Cubre la agenda de otro terapeuta",
+             "expires_at": in_a_month}
+
+
+def permissions_of(token):
+    status, data = call("GET", "/app/bootstrap", token=token)
+    assert status == 200, data
+    return data["user"]["permissions"], data["patients"]
+
+
+status, body = call("POST", overrides_url, {"overrides": [grant_all]}, A)
+check(status == 403, "el admin (sin users.permissions) NO puede dar permisos individuales")
+status, body = call("POST", f"/admin/users/{superadmin_id}/permissions", {"overrides": []}, S)
+check(status == 403, "nadie cambia sus propios permisos")
+status, body = call("POST", overrides_url, {"overrides": [{**grant_all, "reason": " "}]}, S)
+check(status == 400 and body["error"] == "missing_reason", "cada excepción exige un motivo")
+status, body = call("POST", overrides_url, {"overrides": [{**grant_all, "permission": "case.view.assigned"}]}, S)
+check(status == 400 and body["error"] == "redundant_override", "otorgar algo que el rol ya tiene → 400")
+status, body = call("POST", overrides_url, {"overrides": [{**grant_all, "expires_at": "2000-01-01"}]}, S)
+check(status == 400 and body["error"] == "invalid_date", "un vencimiento pasado → 400")
+status, body = call("POST", overrides_url, {"overrides": [grant_all, grant_all]}, S)
+check(status == 400 and body["error"] == "duplicate_override", "un permiso repetido → 400")
+_, patients = permissions_of(T)
+check(find(patients, email=CREATED_PATIENT) is None, "antes: el terapeuta solo ve a sus pacientes")
+status, body = call("POST", overrides_url, {"overrides": [grant_all]}, S)
+check(status == 200, "el super admin le otorga case.view.all a ESE terapeuta (temporal)")
+permissions, patients = permissions_of(T)
+check("case.view.all" in permissions and find(patients, email=CREATED_PATIENT) is not None,
+      "…aplica al instante: ahora ve pacientes que no tiene asignados")
+users = overview(S)["users"]
+override = find(find(users, email=E2E_THERAPIST)["overrides"], permission="case.view.all")
+check(override["active"] and override["expires_at"] == in_a_month and override["granted_by"],
+      "overview: la excepción muestra vencimiento, vigencia y quién la dio")
+check("case.view.all" not in find(users, email=CREATED_THERAPIST)["permissions"],
+      "…y no afecta a los demás usuarios del mismo rol")
+
+status, body = call("POST", overrides_url, {"overrides": [
+    {"permission": "roles.manage", "effect": "GRANT", "reason": "Prueba de escalada"}]}, S)
+check(status == 200, "el super admin le otorga un permiso de administración")
+status, body = call("POST", f"/admin/users/{therapist_id}", {"status": "DISABLED"}, A)
+check(status == 403, "…y el admin ya no puede tocarlo: las reglas miran los permisos efectivos")
+
+status, body = call("POST", overrides_url, {"overrides": [
+    {"permission": "case.edit.assigned", "effect": "DENY", "reason": "Suspensión temporal de edición"}]}, S)
+check(status == 200, "el super admin le QUITA case.edit.assigned sin cambiarle el rol")
+e2e_patient = find(permissions_of(T)[1], email=E2E_PATIENT)
+status, body = call("POST", "/app/behaviors", {"patient_id": e2e_patient["id"], "name": "Bloqueada",
+                                                "operational_definition": "Prueba", "type": "ADAPTATIVA"}, T)
+check(status == 403, "…ya no puede editar a sus propios pacientes")
+check(find(overview(S)["users"], email=E2E_THERAPIST)["role"] == "THERAPIST", "…y sigue con su rol de terapeuta")
+
+sql(f"""update usb_user_permissions set expires_at = systimestamp - interval '1' minute
+         where user_id = {therapist_id} and permission_id = 'case.edit.assigned';""")
+check("case.edit.assigned" in permissions_of(T)[0], "una excepción vencida deja de aplicar sola")
+status, body = call("POST", overrides_url, {"overrides": []}, S)
+check(status == 200 and not find(overview(S)["users"], email=E2E_THERAPIST).get("overrides"),
+      "quitar todas las excepciones devuelve al usuario a los permisos de su rol")
+check("case.view.all" not in permissions_of(T)[0], "…sin case.view.all")
+
+print("\n6. Olvido de contraseña (con la app autenticadora)")
 patient_tokens, secret = enrolled_session(E2E_PATIENT, "e2e-adm-patient-0001")
 status, unknown = call("POST", "/auth/password/forgot", {"email": "nadie@usbrain.test", "device_id": "e2e-forgot-00001"})
 status2, known = call("POST", "/auth/password/forgot", {"email": E2E_PATIENT, "device_id": "e2e-forgot-00001"})

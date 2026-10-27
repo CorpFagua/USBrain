@@ -29,6 +29,10 @@ status, body = login(PATIENT, PHONE, "contraseña-equivocada")
 check(status == 401 and body["error"] == "invalid_credentials", "contraseña incorrecta → 401 invalid_credentials")
 status, body = login("nadie@usb.edu.co", PHONE)
 check(status == 401 and body["error"] == "invalid_credentials", "correo inexistente → mismo 401 (no revela usuarios)")
+for bad_email in ("!#$%&*()=+[]{}<>", "ana'--@usb.edu.co", "ana_perez@usb.edu.co", "a" * 400 + "@usb.edu.co"):
+    status, body = login(bad_email, PHONE)
+    check(status == 400 and body["error"] == "invalid_email",
+          f"correo con caracteres no permitidos ({bad_email[:18]}…) → 400, sin error interno")
 status, body = login(PATIENT, PHONE)
 check(status == 200 and body["status"] == "mfa_enrollment_required", "contraseña correcta → pide enrolar 2FA")
 check(body["enrollment"]["otpauth_uri"].startswith("otpauth://totp/USBrain:"), "entrega URI otpauth:// para el QR")
@@ -49,7 +53,7 @@ check(status == 200 and body["email"] == PATIENT and body["session"]["mfa_method
 status, body = call("GET", "/auth/me", token="usb_at_" + "A" * 43)
 check(status == 401 and body["error"] == "token_expired", "token inventado → 401 token_expired")
 
-print("\n3. Segundo dispositivo: el mismo código TOTP no sirve dos veces")
+print("\n3. Segundo dispositivo: anti-replay y una sola sesión por usuario")
 status, body = login(PATIENT, TABLET)
 check(status == 200 and body["status"] == "mfa_required", "usuario enrolado → pide código 2FA")
 status, body = call("POST", "/auth/mfa/verify", {"challenge_id": body["challenge_id"], "code": totp(secret)})
@@ -60,21 +64,30 @@ status, body = login(PATIENT, TABLET)
 status, body = call("POST", "/auth/mfa/verify", {"challenge_id": body["challenge_id"], "code": totp(secret)})
 check(status == 200, "código de la nueva ventana → sesión en la tablet")
 tablet = body
-status, body = call("GET", "/auth/sessions", token=phone["access_token"])
-check(status == 200 and len(body["items"]) == 2, "GET /sessions lista los 2 dispositivos")
+status, body = call("GET", "/auth/me", token=phone["access_token"])
+check(status == 401, "…y la sesión del teléfono se cierra (una sola sesión por usuario)")
+status, body = call("POST", "/auth/refresh", {"refresh_token": phone["refresh_token"], "device_id": PHONE})
+check(status == 401 and body["error"] == "session_replaced",
+      "…y el teléfono recibe el motivo: se inició sesión en otro dispositivo")
+status, body = call("GET", "/auth/sessions", token=tablet["access_token"])
+check(status == 200 and len(body["items"]) == 1, "GET /sessions: solo la tablet")
 
 print("\n4. Sesión persistente: rotación del refresh token")
-status, body = call("POST", "/auth/refresh", {"refresh_token": phone["refresh_token"], "device_id": PHONE})
-check(status == 200 and body["refresh_token"] != phone["refresh_token"], "refresh → par de tokens nuevo")
-stolen_refresh, phone = phone["refresh_token"], body
-status, body = call("GET", "/auth/me", token=phone["access_token"])
+status, body = call("POST", "/auth/refresh", {"refresh_token": tablet["refresh_token"], "device_id": TABLET})
+check(status == 200 and body["refresh_token"] != tablet["refresh_token"], "refresh → par de tokens nuevo")
+tablet = body
+status, body = call("GET", "/auth/me", token=tablet["access_token"])
 check(status == 200, "el access token nuevo funciona")
-status, body = call("POST", "/auth/refresh", {"refresh_token": phone["refresh_token"], "device_id": TABLET})
+status, body = call("POST", "/auth/refresh", {"refresh_token": tablet["refresh_token"], "device_id": PHONE})
 check(status == 401, "refresh desde otro dispositivo → 401")
-status, body = call("GET", "/auth/me", token=phone["access_token"])
-check(status == 401, "…y la sesión del teléfono queda revocada (token robado)")
+status, body = call("GET", "/auth/me", token=tablet["access_token"])
+check(status == 401, "…y la sesión de la tablet queda revocada (token robado)")
 
-print("\n5. Detección de reutilización del refresh token")
+print("\n5. Código de recuperación y reutilización del refresh token")
+status, body = login(PATIENT, TABLET)
+status, body = call("POST", "/auth/mfa/recovery", {"challenge_id": body["challenge_id"], "recovery_code": recovery_codes[0].lower()})
+check(status == 200 and body["recovery_codes_remaining"] == 9, "código de recuperación válido → sesión (quedan 9)")
+tablet = body
 status, body = call("POST", "/auth/refresh", {"refresh_token": tablet["refresh_token"], "device_id": TABLET})
 check(status == 200, "la tablet renueva su sesión")
 old_tablet, tablet = tablet, body
@@ -83,16 +96,16 @@ check(status == 401 and body["error"] == "session_expired", "reusar un refresh t
 status, body = call("POST", "/auth/refresh", {"refresh_token": tablet["refresh_token"], "device_id": TABLET})
 check(status == 401, "…y se revoca toda la sesión (el token legítimo tampoco sirve)")
 
-print("\n6. Código de recuperación")
+print("\n6. Un código de recuperación no se reutiliza")
 status, body = login(PATIENT, PHONE)
-status, body = call("POST", "/auth/mfa/recovery", {"challenge_id": body["challenge_id"], "recovery_code": recovery_codes[0].lower()})
-check(status == 200 and body["recovery_codes_remaining"] == 9, "código de recuperación válido → sesión (quedan 9)")
-phone = body
-status, body = login(PATIENT, TABLET)
 status, body = call("POST", "/auth/mfa/recovery", {"challenge_id": body["challenge_id"], "recovery_code": recovery_codes[0]})
 check(status == 401 and body["error"] == "invalid_code", "el mismo código de recuperación no sirve dos veces")
+status, body = login(PATIENT, PHONE)
+status, body = call("POST", "/auth/mfa/recovery", {"challenge_id": body["challenge_id"], "recovery_code": recovery_codes[1]})
+check(status == 200 and body["recovery_codes_remaining"] == 8, "otro código válido → sesión en el teléfono (quedan 8)")
+phone = body
 
-print("\n7. Cerrar sesión de otro dispositivo y cambio de contraseña")
+print("\n7. Cambio de contraseña")
 status, body = call("GET", "/auth/sessions", token=phone["access_token"])
 check(status == 200 and [s["current"] for s in body["items"]] == [True], "solo queda la sesión actual")
 status, body = call("POST", "/auth/password", {"current_password": PASSWORD, "new_password": "corta", "code": "000000"}, phone["access_token"])
