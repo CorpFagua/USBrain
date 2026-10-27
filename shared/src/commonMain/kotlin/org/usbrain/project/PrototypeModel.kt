@@ -2,6 +2,7 @@ package org.usbrain.project
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.toMutableStateList
@@ -16,6 +17,8 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.usbrain.project.data.AdminOverviewDto
@@ -140,6 +143,8 @@ enum class Screen {
     THERAPIST_HOME, THERAPIST_PATIENT, THERAPIST_PATIENT_INFO, THERAPIST_BEHAVIOR, THERAPIST_TASK_DETAIL,
     THERAPIST_NEW_BEHAVIOR, THERAPIST_BASELINE_SETUP, THERAPIST_NEW_TASK, THERAPIST_NEW_WIDGET, THERAPIST_ASSIGNED, THERAPIST_PROFILE,
     ADMIN_HOME, ADMIN_USERS, ADMIN_USER_EDIT, ADMIN_ROLES, ADMIN_ROLE_EDIT, ADMIN_PROFILE,
+    // Desde el perfil de cualquier rol.
+    CHANGE_PASSWORD,
 }
 
 data class PasswordAssessment(
@@ -165,6 +170,10 @@ fun passwordCharacterCount(password: String): Int {
     }
     return count
 }
+
+/** Los correos solo llevan letras, números, @ y punto (los crea la administración); el servidor valida lo mismo. */
+fun sanitizeEmailInput(value: String): String =
+    value.lowercase().filter { it in 'a'..'z' || it in '0'..'9' || it == '@' || it == '.' }.take(254)
 
 fun assessPassword(password: String, email: String, exactLength: Boolean = false): PasswordAssessment {
     if (password.isEmpty()) return PasswordAssessment(0, "Sin evaluar", false, null)
@@ -466,6 +475,14 @@ class PrototypeState(
     var loginPassword by mutableStateOf("")
     var firstPassword by mutableStateOf("")
     var firstPasswordConfirmation by mutableStateOf("")
+    // Cambio de contraseña desde el perfil.
+    var changeCurrentPassword by mutableStateOf("")
+    var changeNewPassword by mutableStateOf("")
+    var changeConfirmPassword by mutableStateOf("")
+    var changeCode by mutableStateOf("")
+    var changeError by mutableStateOf<String?>(null)
+    var changeInfo by mutableStateOf<String?>(null)
+    private var changeReturnScreen: Screen? = null
     var authError by mutableStateOf<String?>(null)
     var challengeId by mutableStateOf<String?>(null)
     var enrollment by mutableStateOf<Enrollment?>(null)
@@ -527,6 +544,10 @@ class PrototypeState(
     var draftUserProgram by mutableStateOf("")
     var draftUserCondition by mutableStateOf("")
     var draftActionPassword by mutableStateOf("")
+    // Permisos individuales del usuario en edición: permiso → GRANT | DENY (sin entrada = según su rol).
+    val draftOverrides = mutableStateMapOf<String, String>()
+    var draftOverrideReason by mutableStateOf("")
+    var draftOverrideExpiry by mutableStateOf("")
     var editingRoleId by mutableStateOf<String?>(null)
     var draftRoleId by mutableStateOf("")
     var draftRoleName by mutableStateOf("")
@@ -856,6 +877,7 @@ class PrototypeState(
         previewing = false
         patients.clear()
         adminData = null
+        changeInfo = null
         lockNeedsRestore = false
         lockReturnScreen = null
         authError = message
@@ -935,6 +957,46 @@ class PrototypeState(
     }
 
     // ------------------------------------------------------------------ PIN y biometría
+
+    fun startPasswordChange() {
+        changeReturnScreen = screen
+        changeCurrentPassword = ""
+        changeNewPassword = ""
+        changeConfirmPassword = ""
+        changeCode = ""
+        changeError = null
+        changeInfo = null
+        screen = Screen.CHANGE_PASSWORD
+    }
+
+    fun closePasswordChange() {
+        changeCurrentPassword = ""
+        changeNewPassword = ""
+        changeConfirmPassword = ""
+        changeCode = ""
+        changeError = null
+        screen = changeReturnScreen ?: currentProfile?.homeScreen ?: Screen.LOGIN
+    }
+
+    fun submitPasswordChange() {
+        val email = sessionUser?.email.orEmpty()
+        val code = changeCode.filter { it.isDigit() }
+        val assessment = assessPassword(changeNewPassword, email, exactLength = true)
+        changeError = when {
+            changeCurrentPassword.isEmpty() -> "Escribe tu contraseña actual."
+            !assessment.isValid -> assessment.message ?: "La contraseña no cumple los requisitos."
+            changeNewPassword == changeCurrentPassword -> "La nueva contraseña debe ser distinta de la actual."
+            changeNewPassword != changeConfirmPassword -> "Las contraseñas no coinciden."
+            code.length != 6 -> "Escribe el código de 6 dígitos de tu app autenticadora."
+            else -> null
+        }
+        if (changeError != null) return
+        launch({ changeError = it }) {
+            api.changePassword(changeCurrentPassword, changeNewPassword, code)
+            closePasswordChange()
+            changeInfo = "Contraseña actualizada. Se cerró la sesión en tus otros dispositivos."
+        }
+    }
 
     fun startPinSetup(changing: Boolean) {
         pinChanging = changing
@@ -1142,6 +1204,11 @@ class PrototypeState(
         draftUserTherapistId = user.therapistId
         draftUserPassword = ""
         draftActionPassword = ""
+        // Las vencidas ya no aplican: al guardar se descartan.
+        draftOverrides.clear()
+        user.overrides.filter { it.active }.forEach { draftOverrides[it.permission] = it.effect }
+        draftOverrideReason = ""
+        draftOverrideExpiry = ""
         adminError = null
         adminInfo = null
         screen = Screen.ADMIN_USER_EDIT
@@ -1210,6 +1277,45 @@ class PrototypeState(
                 "reset_mfa" -> "2FA restablecido: en su próximo ingreso configurará la app autenticadora otra vez."
                 else -> "Contraseña restablecida y sesiones cerradas."
             }
+            adminData = api.adminOverview()
+        }
+    }
+
+    /** Cambia la excepción de un permiso; null vuelve a lo que diga el rol. */
+    fun setOverride(permission: String, effect: String?) {
+        if (effect == null) draftOverrides.remove(permission) else draftOverrides[permission] = effect
+    }
+
+    fun saveUserPermissions() {
+        val id = editingUserId ?: return
+        val existing = adminData?.users?.firstOrNull { it.id == id }?.overrides.orEmpty()
+            .filter { it.active }.associateBy { it.permission }
+        // Las que no cambian conservan su motivo y vencimiento; las nuevas usan los del formulario.
+        val changed = draftOverrides.filter { (permission, effect) -> existing[permission]?.effect != effect }
+        adminError = null
+        adminInfo = null
+        if (changed.isNotEmpty() && draftOverrideReason.isBlank()) {
+            adminError = "Escribe el motivo de los permisos individuales que cambiaste."
+            return
+        }
+        launch({ adminError = it }) {
+            api.adminSetUserPermissions(id, buildJsonObject {
+                put("overrides", buildJsonArray {
+                    draftOverrides.forEach { (permission, effect) ->
+                        val kept = existing[permission]?.takeIf { it.effect == effect }
+                        add(buildJsonObject {
+                            put("permission", permission)
+                            put("effect", effect)
+                            put("reason", kept?.reason ?: draftOverrideReason.trim())
+                            (if (kept != null) kept.expiresAt else draftOverrideExpiry.ifBlank { null })
+                                ?.let { put("expires_at", it) }
+                        })
+                    }
+                })
+            })
+            draftOverrideReason = ""
+            draftOverrideExpiry = ""
+            adminInfo = "Permisos individuales guardados. Aplican de inmediato."
             adminData = api.adminOverview()
         }
     }

@@ -171,6 +171,7 @@ fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit
                 Screen.ADMIN_ROLES -> AdminRolesScreen(state)
                 Screen.ADMIN_ROLE_EDIT -> AdminRoleEditScreen(state)
                 Screen.ADMIN_PROFILE -> AdminProfileScreen(state)
+                Screen.CHANGE_PASSWORD -> ChangePasswordScreen(state)
             }
         }
     }
@@ -180,7 +181,7 @@ private fun showsBottomBar(state: PrototypeState): Boolean {
     if (state.role == null) return false
     return state.screen !in listOf(
         Screen.SPLASH, Screen.LOGIN, Screen.FIRST_PASSWORD_CHANGE, Screen.TWO_FACTOR, Screen.RECOVERY_CODES, Screen.FORGOT_PASSWORD,
-        Screen.PIN_SETUP, Screen.BIOMETRIC_OFFER, Screen.LOCK, Screen.ADMIN_USER_EDIT, Screen.ADMIN_ROLE_EDIT,
+        Screen.PIN_SETUP, Screen.BIOMETRIC_OFFER, Screen.LOCK, Screen.ADMIN_USER_EDIT, Screen.ADMIN_ROLE_EDIT, Screen.CHANGE_PASSWORD,
         // Al entrar a una conducta quedas dentro de ese flujo (Historial → conducta → tarea /
         // historial de registros): las tabs se ocultan hasta volver con el botón atrás.
         // PATIENT_BEHAVIORS (la pestaña "Historial" en sí) sí muestra las tabs, por eso no está en esta lista.
@@ -955,7 +956,7 @@ private fun LoginScreen(state: PrototypeState) {
         // El rol (paciente, terapeuta, administrador) lo define la cuenta en el servidor:
         // ya no se elige aquí.
         OutlinedTextField(
-            state.loginEmail, { state.loginEmail = it.trim() }, Modifier.fillMaxWidth(),
+            state.loginEmail, { state.loginEmail = sanitizeEmailInput(it) }, Modifier.fillMaxWidth(),
             label = { Text("Correo institucional") }, singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
         )

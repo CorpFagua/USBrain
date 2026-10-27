@@ -148,6 +148,15 @@ class UsBrainApi(
         }
     }
 
+    /** Cambio de contraseña con sesión iniciada: exige la actual y el código 2FA; cierra los demás dispositivos. */
+    suspend fun changePassword(currentPassword: String, newPassword: String, code: String) {
+        postForId("auth/password", buildJsonObject {
+            put("current_password", currentPassword)
+            put("new_password", newPassword)
+            put("code", code)
+        }, expectId = false)
+    }
+
     suspend fun logout() {
         try {
             authorized<JsonObject> { token -> http.post(url("auth/logout")) { bearer(token) } }
@@ -223,6 +232,11 @@ class UsBrainApi(
         }, expectId = false)
     }
 
+    /** Reemplaza las excepciones individuales del usuario: {"overrides": [...]}. */
+    suspend fun adminSetUserPermissions(userId: String, body: JsonObject) {
+        postForId("admin/users/${userId.encodeURLPathPart()}/permissions", body, expectId = false)
+    }
+
     suspend fun adminCreateRole(body: JsonObject) {
         postForId("admin/roles", body, expectId = false)
     }
@@ -270,7 +284,10 @@ class UsBrainApi(
         }
         if (response.status.value in 400..499) {
             clearSession()
-            throw SessionExpiredException()
+            // El servidor explica el motivo (p. ej. se inició sesión en otro dispositivo).
+            val message = runCatching { ApiJson.decodeFromString(ApiErrorBody.serializer(), response.bodyAsText()).message }
+                .getOrNull()
+            throw if (message.isNullOrBlank()) SessionExpiredException() else SessionExpiredException(message)
         }
         decode<TokenResponse>(response).also(::storeTokens)
     }
@@ -289,7 +306,7 @@ class UsBrainApi(
         if (response.status.isSuccess()) return response.body()
         val error = runCatching { ApiJson.decodeFromString(ApiErrorBody.serializer(), response.bodyAsText()) }
             .getOrDefault(ApiErrorBody(message = "El servidor respondió ${response.status.value}."))
-        if (response.status.value == 401 && error.error in setOf("session_expired", "token_expired", "unauthorized")) {
+        if (response.status.value == 401 && error.error in setOf("session_expired", "session_replaced", "token_expired", "unauthorized")) {
             clearSession()
             throw SessionExpiredException(error.message.ifBlank { "Tu sesión expiró. Inicia sesión de nuevo." })
         }
