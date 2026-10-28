@@ -17,7 +17,7 @@ create table if not exists usb_auth_config (
 merge into usb_auth_config c
 using (
   select 'ACCESS_TTL_SECONDS' k, '600' v, 'Vida del access token (segundos). Corto, como en la banca.' d from dual union all
-  select 'REFRESH_IDLE_DAYS', '30', 'Días sin abrir la app antes de exigir login + 2FA de nuevo.' from dual union all
+    select 'REFRESH_IDLE_MINUTES', '30', 'Minutos sin actividad antes de exigir login + 2FA de nuevo.' from dual union all
   select 'SESSION_ABSOLUTE_DAYS', '90', 'Vida máxima de una sesión aunque se use a diario.' from dual union all
   select 'CHALLENGE_TTL_SECONDS', '300', 'Tiempo para ingresar el código 2FA tras la contraseña.' from dual union all
   select 'CHALLENGE_MAX_ATTEMPTS', '5', 'Intentos de código 2FA por desafío.' from dual union all
@@ -29,6 +29,8 @@ using (
   select 'TOTP_ISSUER', 'USBrain', 'Nombre que muestra la app autenticadora.' from dual
 ) s on (c.config_key = s.k)
 when not matched then insert (config_key, config_value, description) values (s.k, s.v, s.d);
+
+delete from usb_auth_config where config_key = 'REFRESH_IDLE_DAYS';
 
 -- Llaves de la aplicación. En producción: mover a Oracle Wallet / TDE.
 create table if not exists usb_app_keys (

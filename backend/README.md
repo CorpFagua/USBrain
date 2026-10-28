@@ -262,7 +262,7 @@ de login. Sin teléfono ni códigos de recuperación, el administrador usa `rese
 | Clave | Valor | Significado |
 |---|---|---|
 | `ACCESS_TTL_SECONDS` | 600 | Vida del access token (la app lo renueva sola) |
-| `REFRESH_IDLE_DAYS` | 30 | Días sin abrir la app antes de pedir login + 2FA (inactividad) |
+| `REFRESH_IDLE_MINUTES` | 30 | Minutos sin actividad antes de revocar la sesión y pedir login + 2FA |
 | `SESSION_ABSOLUTE_DAYS` | 90 | Vida máxima de una sesión aunque se use a diario |
 | `MAX_SESSIONS_PER_USER` | 1 | Sesiones activas por usuario. Con 1, entrar en otro dispositivo, navegador o pestaña cierra la sesión anterior, y esa sesión ve "se inició sesión con tu cuenta en otro dispositivo" |
 | `MAX_FAILED_LOGINS` / `LOCKOUT_MINUTES` | 5 / 15 | Bloqueo |
@@ -288,8 +288,10 @@ sobrescribe estos valores (solo crea las claves que falten), así que lo que cam
 Cuándo aplica cada cambio:
 - `MAX_SESSIONS_PER_USER`, `MAX_FAILED_LOGINS`, `LOCKOUT_MINUTES`, `CHALLENGE_*`: desde el
   siguiente login.
-- `ACCESS_TTL_SECONDS` y `REFRESH_IDLE_DAYS`: para los tokens que se emitan desde ese momento
-  (los ya entregados conservan su vencimiento).
+- `ACCESS_TTL_SECONDS`: para los tokens que se emitan desde ese momento (los ya entregados
+  conservan su vencimiento).
+- `REFRESH_IDLE_MINUTES`: se comprueba contra `last_seen_at` en cada petición autenticada y refresh;
+  por eso también cierra sesiones existentes que lleven más de 30 minutos inactivas.
 - `PBKDF2_ITERATIONS`: cada contraseña se re-hashea sola en el siguiente login correcto.
 
 ### Reglas de entrada y cambio de contraseña

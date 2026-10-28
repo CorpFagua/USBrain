@@ -341,7 +341,7 @@ create or replace package body usb_auth as
     l_refresh         varchar2(100) := usb_crypto.new_token('usb_rt_');
     l_access_ttl      number        := cfg_num('ACCESS_TTL_SECONDS');
     l_refresh_expires timestamp with time zone :=
-      least(systimestamp + numtodsinterval(cfg_num('REFRESH_IDLE_DAYS'), 'DAY'), p_absolute_expires);
+      least(systimestamp + numtodsinterval(cfg_num('REFRESH_IDLE_MINUTES'), 'MINUTE'), p_absolute_expires);
     l_json            json_object_t := json_object_t();
   begin
     insert into usb_access_tokens (token_hash, session_id, expires_at)
@@ -871,7 +871,6 @@ create or replace package body usb_auth as
     end if;
 
     if l_session.revoked_at is not null
-       or l_token.expires_at <= systimestamp
        or l_session.absolute_expires_at <= systimestamp then
       fail(e_unauthorized, 'session_expired', 'Tu sesión expiró. Inicia sesión de nuevo.');
     end if;
@@ -879,6 +878,16 @@ create or replace package body usb_auth as
     if l_session.device_id != p_device_id then
       audit_event('REFRESH_DEVICE_MISMATCH', l_session.user_id, l_session.session_id, p_device_id);
       revoke_session_internal(l_session.session_id, 'DEVICE_MISMATCH');
+      fail(e_unauthorized, 'session_expired', 'Tu sesión expiró. Inicia sesión de nuevo.');
+    end if;
+
+    if l_session.last_seen_at <= systimestamp
+       - numtodsinterval(cfg_num('REFRESH_IDLE_MINUTES'), 'MINUTE') then
+      revoke_session_internal(l_session.session_id, 'IDLE_TIMEOUT');
+      fail(e_unauthorized, 'session_expired', 'Tu sesión expiró por inactividad. Inicia sesión de nuevo.');
+    end if;
+
+    if l_token.expires_at <= systimestamp then
       fail(e_unauthorized, 'session_expired', 'Tu sesión expiró. Inicia sesión de nuevo.');
     end if;
 
@@ -900,22 +909,34 @@ create or replace package body usb_auth as
 
   procedure authenticate(p_authorization varchar2) is
     l_last_seen timestamp with time zone;
+    l_access_expires timestamp with time zone;
   begin
     if p_authorization is null
        or not regexp_like(p_authorization, '^Bearer usb_at_[A-Za-z0-9_-]{43}$') then
       fail(e_unauthorized, 'unauthorized', 'Se requiere iniciar sesión.');
     end if;
 
-    select s.session_id, s.user_id, s.last_seen_at
-      into g_session_id, g_user_id, l_last_seen
+    select s.session_id, s.user_id, s.last_seen_at, a.expires_at
+      into g_session_id, g_user_id, l_last_seen, l_access_expires
       from usb_access_tokens a
       join usb_sessions s on s.session_id = a.session_id
       join usb_users u on u.user_id = s.user_id
      where a.token_hash = usb_crypto.sha256(substr(p_authorization, 8))
-       and a.expires_at > systimestamp
        and s.revoked_at is null
        and s.absolute_expires_at > systimestamp
        and u.status = 'ACTIVE';
+
+     if l_last_seen <= systimestamp
+       - numtodsinterval(cfg_num('REFRESH_IDLE_MINUTES'), 'MINUTE') then
+      revoke_session_internal(g_session_id, 'IDLE_TIMEOUT');
+      g_session_id := null;
+      g_user_id    := null;
+      fail(e_unauthorized, 'session_expired', 'Tu sesión expiró por inactividad. Inicia sesión de nuevo.');
+     end if;
+
+    if l_access_expires <= systimestamp then
+      fail(e_unauthorized, 'token_expired', 'Tu acceso expiró. Renueva la sesión.');
+    end if;
 
     -- Evita escribir en cada petición: basta con actualizar una vez por minuto.
     if l_last_seen < systimestamp - interval '1' minute then
