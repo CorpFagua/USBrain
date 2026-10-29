@@ -67,6 +67,47 @@ solo lectura (el servidor no deja que el terapeuta registre por el paciente).
 Login con contraseña + 2FA (TOTP) y sesiones persistentes por dispositivo sobre Oracle + ORDS en
 Docker. Instalación, contrato de la API y modelo de seguridad en [`backend/README.md`](backend/README.md).
 
+### Panel estadístico del superadministrador
+
+El perfil `SUPERADMIN` incluye la pestaña **Análisis**. La pantalla obtiene desde ORDS una
+exportación mínima del mismo esquema Oracle que puede administrarse con APEX; no requiere cargar
+archivos ni configurar una segunda conexión. El servidor entrega series seudonimizadas sin nombres,
+correos, documentos, diagnósticos ni notas. Para el análisis diario autorizado se incluye la fecha
+de observación, porque es necesaria para ordenar los 60 días y ubicar el inicio del tratamiento.
+
+#### Diseño de ansiedad: 60 días en dos fases
+
+Para evaluar si el tratamiento reduce la frecuencia de episodios de ansiedad, se guarda una fila
+por cada episodio o registro recibido: `patient_id` interno, `behavior_id`, `entry_date`, `phase`
+(`LINEA_BASE` durante los 30 días sin tratamiento o `INTERVENCION` durante los 30 días con
+tratamiento) y el valor. Si un día tiene varias entradas, el análisis las **suma** y produce un
+único total diario; no debe usarse el promedio de entradas del mismo día.
+
+La hipótesis es unilateral: `H₀: μ_C ≥ μ_S` frente a `H₁: μ_C < μ_S`, donde `μ_S` es la media
+diaria sin tratamiento y `μ_C` la media diaria con tratamiento. La gráfica principal conserva los
+60 días en una sola línea cronológica: línea base a la izquierda, una línea vertical en el inicio
+del tratamiento e intervención a la derecha. Así permite ver picos, variabilidad y tendencia,
+además del contraste de medias.
+
+Para cada variable con al menos tres observaciones de línea base y tres de intervención se muestra:
+
+- gráfica separada por fases, con las variables descritas como **sesiones** y **medición/unidad**,
+  sin rótulos genéricos “X” o “Y”;
+- vistas por sesión, semana, mes y calendario relativo, con orden ascendente o descendente;
+- panorama global y comparación de dos variables mediante cambio porcentual normalizado, sin
+  mezclar minutos, frecuencia e intensidad en una escala común;
+- agregados descriptivos por programa académico solo cuando el grupo tiene al menos tres
+  participantes, para reducir el riesgo de reidentificación;
+- promedios de cada fase, diferencia, cambio porcentual y tamaño del efecto;
+- contraste exploratorio bilateral de medias con `H₀`, `H₁` y valor p;
+
+- advertencia explícita de que una serie temporal puede estar autocorrelacionada y que el resultado
+  no demuestra causalidad ni sustituye el análisis visual y clínico.
+
+La semilla de Laura Mendoza aporta una muestra sintética extensa (14 observaciones de línea base y
+77 de intervención) para probar el panel sin usar información de pacientes reales. El cálculo vive
+en Kotlin compartido (`Analytics.kt`) para producir el mismo resultado en web y Android.
+
 ---
 
 ## Identidad visual

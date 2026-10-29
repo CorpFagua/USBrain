@@ -218,6 +218,9 @@ class UsBrainApi(
     suspend fun adminOverview(): AdminOverviewDto =
         authorized { token -> http.get(url("admin/overview")) { bearer(token) } }
 
+    suspend fun adminAnalytics(): AnalyticsDatasetDto =
+        authorized { token -> http.get(url("admin/analytics")) { bearer(token) } }
+
     suspend fun adminCreateUser(body: JsonObject): String = postForId("admin/users", body)
 
     suspend fun adminUpdateUser(userId: String, body: JsonObject) {

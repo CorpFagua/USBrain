@@ -117,6 +117,8 @@ using (
          'Crea, edita y borra roles y decide qué permisos tiene cada uno.' from dual union all
   select 'users.permissions', 'Otorgar permisos individuales', 'Administración',
          'Da o quita un permiso a un usuario concreto sin cambiar su rol (con motivo y vencimiento opcional).' from dual union all
+  select 'analytics.view', 'Ver análisis estadístico', 'Administración',
+         'Consulta series seudonimizadas y resultados exploratorios de hipótesis.' from dual union all
   select 'audit.view', 'Ver bitácora de seguridad', 'Administración',
          'Consulta los inicios de sesión, fallos, bloqueos y cambios de administración.' from dual
 ) s on (p.permission_id = s.id)
