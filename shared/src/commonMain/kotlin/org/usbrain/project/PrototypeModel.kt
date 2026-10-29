@@ -740,6 +740,9 @@ class PrototypeState(
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: SessionExpiredException) {
+                // La sesión guardada ya no vale: al login, diciendo por qué (p. ej. inactividad).
+                endSession(e.message)
             } catch (e: Exception) {
                 // Sin red no se borra la sesión: se ofrece reintentar.
                 connectionError = "No se pudo conectar con el servidor. Revisa tu conexión."

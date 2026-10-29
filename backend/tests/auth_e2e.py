@@ -11,7 +11,7 @@ no se acepta dos veces).
 import sys
 
 from support import (E2E_ADMIN, E2E_PATIENT, PASSWORD, call, check, ensure_test_users, login, passed,
-                     reset_user, totp, wait_next_step)
+                     reset_user, sql, totp, wait_next_step)
 
 PATIENT = E2E_PATIENT
 ADMIN = E2E_ADMIN
@@ -143,6 +143,11 @@ sql(f"update usb_sessions set last_seen_at = systimestamp - numtodsinterval(31, 
     f"where device_id = '{PHONE}' and revoked_at is null;")
 status, body = call("GET", "/auth/me", token=idle_access_session["access_token"])
 check(status == 401, "API protegida revoca la sesión al detectar inactividad")
+status, body = call("POST", "/auth/refresh", {
+    "refresh_token": idle_access_session["refresh_token"], "device_id": PHONE,
+})
+check(status == 401 and "inactividad" in body["message"],
+      "…y la renovación automática de la app recibe el motivo: inactividad")
 
 status, body = login(PATIENT, TABLET, new_password)
 check(status == 200 and body["status"] == "mfa_required", "nuevo login para probar expiración del refresh")

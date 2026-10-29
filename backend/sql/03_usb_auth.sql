@@ -824,17 +824,18 @@ create or replace package body usb_auth as
   -- Sesión persistente
   -- ---------------------------------------------------------------------------
 
-  -- ¿La última sesión cerrada en este dispositivo (último día) la cerró un login nuevo?
-  function replaced_on(p_device_id varchar2) return boolean is
+  -- Motivo con que se cerró la última sesión de este dispositivo (último día), o null.
+  function last_revoke_reason(p_device_id varchar2) return varchar2 is
     l_reason usb_sessions.revoke_reason%type;
   begin
     select max(revoke_reason) keep (dense_rank last order by revoked_at) into l_reason
       from usb_sessions
      where device_id = p_device_id and revoked_at > systimestamp - interval '1' day;
-    return l_reason in ('SESSION_LIMIT', 'REPLACED');
-  end replaced_on;
+    return l_reason;
+  end last_revoke_reason;
 
   function refresh(p_refresh_token varchar2, p_device_id varchar2) return json_object_t is
+    l_reason  varchar2(10);
     l_token   usb_refresh_tokens%rowtype;
     l_session usb_sessions%rowtype;
     l_user    usb_users%rowtype;
@@ -851,12 +852,21 @@ create or replace package body usb_auth as
     exception
       when no_data_found then
         audit_event('REFRESH_INVALID', null, null, p_device_id);
-        -- Al revocar una sesión se borran sus tokens; por el dispositivo se sabe si la cerró
-        -- un login en otro lado (una sola sesión por usuario) para avisarle, por si no fue él.
-        if replaced_on(p_device_id) then
+        -- Al revocar una sesión se borran sus tokens; por el dispositivo se sabe por qué se
+        -- cerró, para que la app muestre el motivo real (la renovación automática ocurre justo
+        -- después del 401 de authenticate y, sin esto, el mensaje se perdería).
+        case last_revoke_reason(p_device_id)
+          when 'SESSION_LIMIT' then l_reason := 'replaced';
+          when 'REPLACED' then l_reason := 'replaced';
+          when 'IDLE_TIMEOUT' then l_reason := 'idle';
+          else l_reason := null;
+        end case;
+        if l_reason = 'replaced' then
           fail(e_unauthorized, 'session_replaced',
                'Tu sesión se cerró porque se inició sesión con tu cuenta en otro dispositivo o pestaña. '
                || 'Si no fuiste tú, cambia tu contraseña.');
+        elsif l_reason = 'idle' then
+          fail(e_unauthorized, 'session_expired', 'Tu sesión expiró por inactividad. Inicia sesión de nuevo.');
         end if;
         fail(e_unauthorized, 'session_expired', 'Tu sesión expiró. Inicia sesión de nuevo.');
     end;
