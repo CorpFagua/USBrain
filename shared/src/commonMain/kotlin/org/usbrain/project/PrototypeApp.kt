@@ -166,6 +166,7 @@ fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit
                 Screen.THERAPIST_ASSIGNED -> TherapistAssignedScreen(state)
                 Screen.THERAPIST_PROFILE -> TherapistProfileScreen(state)
                 Screen.ADMIN_HOME -> AdminHomeScreen(state, dark, onToggleTheme)
+                Screen.ADMIN_ANALYTICS -> AdminAnalyticsScreen(state)
                 Screen.ADMIN_USERS -> AdminUsersScreen(state)
                 Screen.ADMIN_USER_EDIT -> AdminUserEditScreen(state)
                 Screen.ADMIN_ROLES -> AdminRolesScreen(state)
@@ -399,8 +400,10 @@ internal fun DropdownField(
     placeholder: String,
     options: List<Pair<String, String>>,
     onSelect: (String) -> Unit,
+    searchable: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
     Column {
         FieldLabel(label)
         Box {
@@ -408,7 +411,16 @@ internal fun DropdownField(
                 Text(selectedLabel ?: placeholder, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                options.forEach { (id, optionLabel) ->
+                if (searchable) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = { Text("Buscar variable") },
+                        singleLine = true,
+                        modifier = Modifier.padding(horizontal = 8.dp).fillMaxWidth(),
+                    )
+                }
+                options.filter { (_, optionLabel) -> optionLabel.contains(query, ignoreCase = true) }.forEach { (id, optionLabel) ->
                     DropdownMenuItem(text = { Text(optionLabel) }, onClick = { onSelect(id); expanded = false })
                 }
             }
@@ -690,6 +702,11 @@ private fun ChartCard(behavior: Behavior, dimension: Dimension = behavior.dimens
                 )
                 Spacer(Modifier.height(12.dp))
             }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Seguimiento: sesiones por fase", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Medición: ${axisUnit(dimension)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.height(6.dp))
             val effectiveMonth = selectedMonth.takeIf { monthlyPanel }
             val hasBaseline = baselineRecords.any { effectiveMonth == null || monthKey(it.date) == effectiveMonth }
             val hasIntervention = interventionRecords.any { effectiveMonth == null || monthKey(it.date) == effectiveMonth }
@@ -792,6 +809,10 @@ private fun WidgetChartCard(task: TrackTask, widget: WidgetConfig) {
             Text(task.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("Tendencia · ${widget.name}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Text("Dirección esperada: ${expectedWidgetDirection(widget)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Seguimiento: días", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Medición: ${widget.unit ?: widget.name}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 8.dp)) {
                 listOf(null to "Todo", 7 to "7 días", 14 to "14 días", 30 to "30 días").forEach { (days, label) ->
                     TabChip(period == days, { period = days }, label)

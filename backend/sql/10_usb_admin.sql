@@ -22,6 +22,9 @@ create or replace package usb_admin authid definer as
 
   -- Usuarios, roles, permisos, terapeutas y (con audit.view) la bitácora reciente.
   function overview return clob;
+  -- Exportación mínima para análisis: sin nombres, correos, documentos, diagnósticos,
+  -- notas ni fechas exactas. APEX y ORDS leen el mismo esquema Oracle.
+  function analytics_dataset return clob;
 
   function create_user(p_request json_object_t) return number;
   procedure update_user(p_user_id number, p_request json_object_t);
@@ -256,6 +259,154 @@ create or replace package body usb_admin as
       from dual;
     return l_result;
   end overview;
+
+  function analytics_dataset return clob is
+    l_result clob;
+  begin
+    if not usb_auth.has_permission('analytics.view') then
+      fail(usb_auth.e_forbidden, 'forbidden', 'No tienes permiso para consultar análisis estadísticos.');
+    end if;
+
+    select json_serialize(json_object(
+      'status' value 'CONNECTED',
+      'source' value 'Oracle/ORDS · esquema USBRAIN (consultable desde APEX)',
+      'generated_at' value to_char(sys_extract_utc(systimestamp), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+      'privacy' value json_object(
+        'pseudonymized' value 'true' format json,
+        'fields' value json_array('series_id', 'behavior', 'dimension', 'phase', 'date', 'daily_total'),
+        'excluded' value json_array('name', 'email', 'document', 'diagnosis', 'notes')
+      ),
+      'series' value coalesce((
+        select json_arrayagg(json_object(
+          'id' value s.series_id,
+          'behavior' value s.behavior_name,
+          'dimension' value s.dimension,
+          'unit' value case s.dimension
+            when 'DURACION' then 'minutos'
+            when 'INTENSIDAD' then 'escala 0–10'
+            else 'episodios por sesión' end,
+          'expected_direction' value case when s.behavior_type = 'ADAPTATIVA' then 'INCREASE' else 'DECREASE' end,
+          'baseline' value coalesce((
+            select json_arrayagg(json_object('session' value x.session_no, 'day' value x.day_no,
+                                             'date' value to_char(x.entry_date, 'YYYY-MM-DD'), 'value' value x.value)
+                                 order by x.session_no returning json)
+              from (
+                select row_number() over(order by d.entry_date) session_no,
+                       d.entry_date,
+                       trunc(d.entry_date) - (
+                         select min(trunc(e0.entry_date)) from usb_task_entries e0
+                         join usb_tasks t0 on t0.task_id = e0.task_id
+                         where t0.behavior_id = s.behavior_id and t0.dimension = s.dimension
+                       ) + 1 day_no, d.value
+                  from (
+                    select trunc(e.entry_date) entry_date, sum(e.value) value
+                      from usb_task_entries e join usb_tasks t on t.task_id = e.task_id
+                     where t.behavior_id = s.behavior_id and t.dimension = s.dimension
+                       and e.phase = 'LINEA_BASE'
+                     group by trunc(e.entry_date)
+                  ) d
+              ) x
+          ), json_array(returning json)),
+          'intervention' value coalesce((
+            select json_arrayagg(json_object('session' value x.session_no, 'day' value x.day_no,
+                                             'date' value to_char(x.entry_date, 'YYYY-MM-DD'), 'value' value x.value)
+                                 order by x.session_no returning json)
+              from (
+                select row_number() over(order by d.entry_date) session_no,
+                       d.entry_date,
+                       trunc(d.entry_date) - (
+                         select min(trunc(e0.entry_date)) from usb_task_entries e0
+                         join usb_tasks t0 on t0.task_id = e0.task_id
+                         where t0.behavior_id = s.behavior_id and t0.dimension = s.dimension
+                       ) + 1 day_no, d.value
+                  from (
+                    select trunc(e.entry_date) entry_date, sum(e.value) value
+                      from usb_task_entries e join usb_tasks t on t.task_id = e.task_id
+                     where t.behavior_id = s.behavior_id and t.dimension = s.dimension
+                       and e.phase = 'INTERVENCION'
+                     group by trunc(e.entry_date)
+                  ) d
+              ) x
+          ), json_array(returning json))
+          returning json) order by s.behavior_name, s.dimension returning json)
+          from (
+            select distinct b.behavior_id,
+                   substr(standard_hash(to_char(b.behavior_id) || ':' || t.dimension || ':usbrain-analytics-v1', 'SHA256'), 1, 16) series_id,
+                   b.name behavior_name, b.behavior_type, t.dimension
+              from usb_behaviors b
+              join usb_tasks t on t.behavior_id = b.behavior_id
+              join usb_task_entries e on e.task_id = t.task_id
+             where t.task_type = 'REGISTRO_AUTONOMO'
+             group by b.behavior_id, b.name, b.behavior_type, t.dimension
+            having count(case when e.phase = 'LINEA_BASE' then 1 end) >= 3
+               and count(case when e.phase = 'INTERVENCION' then 1 end) >= 3
+          ) s
+      ), json_array(returning json)),
+      'program_groups' value coalesce((
+        select json_arrayagg(json_object(
+          'program' value g.program,
+          'dimension' value g.dimension,
+          'unit' value case g.dimension when 'DURACION' then 'minutos'
+                       when 'INTENSIDAD' then 'escala 0–10' else 'episodios por sesión' end,
+          'participants' value g.participants,
+          'baseline_mean' value g.baseline_mean,
+          'intervention_mean' value g.intervention_mean returning json)
+          order by g.program, g.dimension returning json)
+        from (
+          select p.program, t.dimension, count(distinct c.patient_id) participants,
+                 round(avg(case when e.phase = 'LINEA_BASE' then e.value end), 3) baseline_mean,
+                 round(avg(case when e.phase = 'INTERVENCION' then e.value end), 3) intervention_mean
+            from usb_task_entries e
+            join usb_tasks t on t.task_id = e.task_id and t.task_type = 'REGISTRO_AUTONOMO'
+            join usb_behaviors b on b.behavior_id = t.behavior_id
+            join usb_cases c on c.case_id = b.case_id
+            join usb_patient_profiles p on p.user_id = c.patient_id
+           where p.condition = 'Cohorte ficticia de ansiedad'
+             and b.name = 'Episodios de ansiedad en clase'
+             and t.dimension = 'FRECUENCIA'
+           group by p.program, t.dimension
+          having count(distinct c.patient_id) >= 3
+             and count(case when e.phase = 'LINEA_BASE' then 1 end) >= 3
+             and count(case when e.phase = 'INTERVENCION' then 1 end) >= 3
+        ) g
+      ), json_array(returning json)),
+      'age_groups' value coalesce((
+        select json_arrayagg(json_object(
+          'program' value g.age_group,
+          'dimension' value 'FRECUENCIA',
+          'unit' value 'episodios por día',
+          'participants' value g.participants,
+          'baseline_mean' value g.baseline_mean,
+          'intervention_mean' value g.intervention_mean returning json)
+          order by g.age_order returning json)
+        from (
+          select case when floor(months_between(date '2026-10-28', p.birth_date) / 12) between 18 and 20 then '18–20 años'
+                      when floor(months_between(date '2026-10-28', p.birth_date) / 12) between 21 and 23 then '21–23 años'
+                      else '24–26 años' end age_group,
+                 case when floor(months_between(date '2026-10-28', p.birth_date) / 12) between 18 and 20 then 1
+                      when floor(months_between(date '2026-10-28', p.birth_date) / 12) between 21 and 23 then 2 else 3 end age_order,
+                 count(distinct c.patient_id) participants,
+                 round(avg(case when e.phase = 'LINEA_BASE' then e.value end), 3) baseline_mean,
+                 round(avg(case when e.phase = 'INTERVENCION' then e.value end), 3) intervention_mean
+            from usb_task_entries e
+            join usb_tasks t on t.task_id = e.task_id and t.task_type = 'REGISTRO_AUTONOMO'
+            join usb_behaviors b on b.behavior_id = t.behavior_id
+            join usb_cases c on c.case_id = b.case_id
+            join usb_patient_profiles p on p.user_id = c.patient_id
+           where p.condition = 'Cohorte ficticia de ansiedad'
+             and b.name = 'Episodios de ansiedad en clase'
+             and t.dimension = 'FRECUENCIA'
+           group by case when floor(months_between(date '2026-10-28', p.birth_date) / 12) between 18 and 20 then '18–20 años'
+                         when floor(months_between(date '2026-10-28', p.birth_date) / 12) between 21 and 23 then '21–23 años'
+                         else '24–26 años' end,
+                    case when floor(months_between(date '2026-10-28', p.birth_date) / 12) between 18 and 20 then 1
+                         when floor(months_between(date '2026-10-28', p.birth_date) / 12) between 21 and 23 then 2 else 3 end
+        ) g
+      ), json_array(returning json))
+      returning json) returning clob)
+      into l_result from dual;
+    return l_result;
+  end analytics_dataset;
 
   -- ---------------------------------------------------------------------------
   -- Usuarios

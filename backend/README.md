@@ -176,6 +176,30 @@ Permisos: el **paciente** ve solo su caso y es el único que registra sus activi
 existiera); el **administrador** ve todo en modo lectura. Una actividad recurrente aparece
 pendiente cada día hasta que se registra ese día.
 
+## Exportación analítica segura (`/ords/usbrain/v1/admin/analytics`)
+
+`GET admin/analytics` requiere Bearer y el permiso sensible `analytics.view`, asignado por defecto
+únicamente a `SUPERADMIN`. APEX no es otra base ni necesita una conexión adicional: APEX y ORDS
+consultan el mismo esquema Oracle `USBRAIN`.
+
+La respuesta contiene exclusivamente series aptas para comparar línea base e intervención:
+
+- identificador seudónimo derivado mediante SHA-256;
+- nombre de la conducta y dimensión de medición;
+- fase, número ordinal de sesión y valor.
+
+No exporta nombres, correos, documentos, diagnósticos ni notas. La fecha de observación se entrega
+al superadministrador autorizado porque es necesaria para sumar episodios por día y ordenar la serie.
+Una serie aparece
+solo cuando dispone de al menos tres observaciones en cada fase. La aplicación utiliza todos los
+valores para la comparación estadística y reduce únicamente los puntos dibujados cuando la gráfica
+sería demasiado densa.
+
+Cada punto incluye el total diario y su fecha de observación para construir las vistas cronológica,
+semanal, mensual y de calendario. Los agregados por programa académico se devuelven únicamente
+cuando existen al menos tres participantes en el grupo; son descriptivos y no deben interpretarse
+como evidencia causal sobre una carrera.
+
 Alta de pacientes (SQL o APEX):
 
 ```sql
@@ -262,7 +286,7 @@ de login. Sin teléfono ni códigos de recuperación, el administrador usa `rese
 | Clave | Valor | Significado |
 |---|---|---|
 | `ACCESS_TTL_SECONDS` | 600 | Vida del access token (la app lo renueva sola) |
-| `REFRESH_IDLE_DAYS` | 30 | Días sin abrir la app antes de pedir login + 2FA (inactividad) |
+| `REFRESH_IDLE_MINUTES` | 30 | Minutos sin actividad antes de revocar la sesión y pedir login + 2FA |
 | `SESSION_ABSOLUTE_DAYS` | 90 | Vida máxima de una sesión aunque se use a diario |
 | `MAX_SESSIONS_PER_USER` | 1 | Sesiones activas por usuario. Con 1, entrar en otro dispositivo, navegador o pestaña cierra la sesión anterior, y esa sesión ve "se inició sesión con tu cuenta en otro dispositivo" |
 | `MAX_FAILED_LOGINS` / `LOCKOUT_MINUTES` | 5 / 15 | Bloqueo |
@@ -288,8 +312,10 @@ sobrescribe estos valores (solo crea las claves que falten), así que lo que cam
 Cuándo aplica cada cambio:
 - `MAX_SESSIONS_PER_USER`, `MAX_FAILED_LOGINS`, `LOCKOUT_MINUTES`, `CHALLENGE_*`: desde el
   siguiente login.
-- `ACCESS_TTL_SECONDS` y `REFRESH_IDLE_DAYS`: para los tokens que se emitan desde ese momento
-  (los ya entregados conservan su vencimiento).
+- `ACCESS_TTL_SECONDS`: para los tokens que se emitan desde ese momento (los ya entregados
+  conservan su vencimiento).
+- `REFRESH_IDLE_MINUTES`: se comprueba contra `last_seen_at` en cada petición autenticada y refresh;
+  por eso también cierra sesiones existentes que lleven más de 30 minutos inactivas.
 - `PBKDF2_ITERATIONS`: cada contraseña se re-hashea sola en el siguiente login correcto.
 
 ### Reglas de entrada y cambio de contraseña

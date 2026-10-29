@@ -9,6 +9,7 @@ set define off feedback off
 create or replace package usb_admin_api authid definer as
 
   procedure overview(p_authorization varchar2);
+  procedure analytics(p_authorization varchar2);
   procedure create_user(p_authorization varchar2, p_body clob);
   procedure update_user(p_authorization varchar2, p_user_id varchar2, p_body clob);
   procedure user_action(p_authorization varchar2, p_user_id varchar2, p_body clob);
@@ -48,6 +49,14 @@ create or replace package body usb_admin_api as
   exception
     when others then usb_api.handle_error('GET /admin/overview');
   end overview;
+
+  procedure analytics(p_authorization varchar2) is
+  begin
+    usb_api.start_authenticated(p_authorization);
+    usb_api.respond_ok_clob(usb_admin.analytics_dataset);
+  exception
+    when others then usb_api.handle_error('GET /admin/analytics');
+  end analytics;
 
   procedure create_user(p_authorization varchar2, p_body clob) is
   begin

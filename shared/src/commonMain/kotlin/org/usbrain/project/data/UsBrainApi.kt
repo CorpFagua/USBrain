@@ -138,14 +138,13 @@ class UsBrainApi(
         }
     }
 
-    /** Al abrir la app: si hay un refresh token guardado, recupera la sesión sin pedir login. */
+    /**
+     * Al abrir la app: si hay un refresh token guardado, recupera la sesión sin pedir login.
+     * Si el servidor la cerró (inactividad, otro dispositivo…) lanza [SessionExpiredException] con el motivo.
+     */
     suspend fun restoreSession(): SessionUser? {
         if (!hasStoredSession) return null
-        return try {
-            refresh(staleToken = null).user
-        } catch (e: SessionExpiredException) {
-            null
-        }
+        return refresh(staleToken = null).user
     }
 
     /** Cambio de contraseña con sesión iniciada: exige la actual y el código 2FA; cierra los demás dispositivos. */
@@ -218,6 +217,9 @@ class UsBrainApi(
 
     suspend fun adminOverview(): AdminOverviewDto =
         authorized { token -> http.get(url("admin/overview")) { bearer(token) } }
+
+    suspend fun adminAnalytics(): AnalyticsDatasetDto =
+        authorized { token -> http.get(url("admin/analytics")) { bearer(token) } }
 
     suspend fun adminCreateUser(body: JsonObject): String = postForId("admin/users", body)
 

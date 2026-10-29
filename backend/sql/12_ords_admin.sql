@@ -31,6 +31,7 @@ begin
                      p_comments => 'Usuarios, roles y permisos (roles dinámicos).');
 
   endpoint('overview',          'GET',    'begin usb_admin_api.overview(:authorization); end;');
+  endpoint('analytics',         'GET',    'begin usb_admin_api.analytics(:authorization); end;');
   endpoint('users',             'POST',   'begin usb_admin_api.create_user(:authorization, :body_text); end;');
   endpoint('users/:id',         'POST',   'begin usb_admin_api.update_user(:authorization, :id, :body_text); end;');
   endpoint('users/:id/actions', 'POST',   'begin usb_admin_api.user_action(:authorization, :id, :body_text); end;');

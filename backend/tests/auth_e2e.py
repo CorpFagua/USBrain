@@ -11,7 +11,7 @@ no se acepta dos veces).
 import sys
 
 from support import (E2E_ADMIN, E2E_PATIENT, PASSWORD, call, check, ensure_test_users, login, passed,
-                     reset_user, totp, wait_next_step)
+                     reset_user, sql, totp, wait_next_step)
 
 PATIENT = E2E_PATIENT
 ADMIN = E2E_ADMIN
@@ -131,7 +131,39 @@ check(status == 200, "logout")
 status, body = call("GET", "/auth/me", token=phone["access_token"])
 check(status == 401, "después del logout el token ya no sirve")
 
-print("\n8. Bloqueo por intentos fallidos")
+print("\n8. Cierre de sesión por 30 minutos de inactividad")
+status, body = login(PATIENT, PHONE, new_password)
+check(status == 200 and body["status"] == "mfa_required", "login para probar el límite de inactividad")
+wait_next_step()
+status, idle_access_session = call("POST", "/auth/mfa/verify", {
+    "challenge_id": body["challenge_id"], "code": totp(secret),
+})
+check(status == 200, "sesión de prueba iniciada")
+sql(f"update usb_sessions set last_seen_at = systimestamp - numtodsinterval(31, 'MINUTE') "
+    f"where device_id = '{PHONE}' and revoked_at is null;")
+status, body = call("GET", "/auth/me", token=idle_access_session["access_token"])
+check(status == 401, "API protegida revoca la sesión al detectar inactividad")
+status, body = call("POST", "/auth/refresh", {
+    "refresh_token": idle_access_session["refresh_token"], "device_id": PHONE,
+})
+check(status == 401 and "inactividad" in body["message"],
+      "…y la renovación automática de la app recibe el motivo: inactividad")
+
+status, body = login(PATIENT, TABLET, new_password)
+check(status == 200 and body["status"] == "mfa_required", "nuevo login para probar expiración del refresh")
+wait_next_step()
+status, idle_refresh_session = call("POST", "/auth/mfa/verify", {
+    "challenge_id": body["challenge_id"], "code": totp(secret),
+})
+check(status == 200, "segunda sesión de prueba iniciada")
+sql(f"update usb_sessions set last_seen_at = systimestamp - numtodsinterval(31, 'MINUTE') "
+    f"where device_id = '{TABLET}' and revoked_at is null;")
+status, body = call("POST", "/auth/refresh", {
+    "refresh_token": idle_refresh_session["refresh_token"], "device_id": TABLET,
+})
+check(status == 401 and body["error"] == "session_expired", "refresh tras 30 minutos inactivo -> 401")
+
+print("\n9. Bloqueo por intentos fallidos")
 for _ in range(5):
     status, body = login(ADMIN, PHONE, "intento-equivocado")
 check(status == 401, "5 contraseñas incorrectas")

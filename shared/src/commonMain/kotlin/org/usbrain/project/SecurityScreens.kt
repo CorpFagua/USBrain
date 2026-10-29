@@ -178,17 +178,6 @@ internal fun ForgotPasswordScreen(state: PrototypeState) {
                 Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             OutlinedTextField(
-                state.forgotCode,
-                { v -> state.forgotCode = if (state.forgotUseRecovery) v.uppercase().take(11) else v.filter { it.isDigit() }.take(6) },
-                Modifier.fillMaxWidth(),
-                label = { Text(if (state.forgotUseRecovery) "Código de recuperación" else "Código de 6 dígitos") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = if (state.forgotUseRecovery) KeyboardType.Ascii else KeyboardType.NumberPassword),
-            )
-            TextButton(onClick = { state.forgotUseRecovery = !state.forgotUseRecovery; state.forgotCode = "" }) {
-                Text(if (state.forgotUseRecovery) "Usar el código de la app autenticadora" else "No tengo mi teléfono: usar un código de recuperación")
-            }
-            OutlinedTextField(
                 state.forgotNewPassword, { state.forgotNewPassword = it }, Modifier.fillMaxWidth(),
                 label = { Text("Nueva contraseña") }, singleLine = true,
                 isError = state.forgotNewPassword.isNotEmpty() &&
@@ -233,6 +222,17 @@ internal fun ForgotPasswordScreen(state: PrototypeState) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            OutlinedTextField(
+                state.forgotCode,
+                { v -> state.forgotCode = if (state.forgotUseRecovery) v.uppercase().take(11) else v.filter { it.isDigit() }.take(6) },
+                Modifier.fillMaxWidth(),
+                label = { Text(if (state.forgotUseRecovery) "Código de recuperación" else "Código de 6 dígitos") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = if (state.forgotUseRecovery) KeyboardType.Ascii else KeyboardType.NumberPassword),
+            )
+            TextButton(onClick = { state.forgotUseRecovery = !state.forgotUseRecovery; state.forgotCode = "" }) {
+                Text(if (state.forgotUseRecovery) "Usar el código de la app autenticadora" else "No tengo mi teléfono: usar un código de recuperación")
+            }
             state.authError?.let { ErrorText(it) }
             Button(
                 onClick = { state.submitResetPassword() },
