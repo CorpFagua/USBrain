@@ -45,7 +45,7 @@ check(superadmin["user"]["role"] == "SUPERADMIN" and "roles.manage" in superadmi
 check(admin["user"]["profile"] == "ADMIN" and "roles.manage" not in admin["user"]["permissions"],
       "el admin tiene interfaz de administración pero no gestiona roles")
 data = overview(S)
-check(len(data["permissions"]) >= 11 and find(data["roles"], id="SUPERADMIN")["is_locked"],
+check(len(data["permissions"]) >= 12 and find(data["roles"], id="SUPERADMIN")["is_locked"],
       "overview: catálogo de permisos y rol SUPERADMIN bloqueado")
 therapists = [t["id"] for t in data["therapists"]]
 check(find(data["users"], email=E2E_THERAPIST)["id"] in therapists
@@ -53,6 +53,14 @@ check(find(data["users"], email=E2E_THERAPIST)["id"] in therapists
       "los candidatos a terapeuta son roles de terapeuta (no el super admin)")
 check(data["events"] is not None and len(data["events"]) > 0, "el super admin ve la bitácora")
 check(overview(A)["users"] is not None, "el admin ve los usuarios")
+status, analytics = call("GET", "/admin/analytics", token=S)
+serialized_series = str(analytics["series"]).lower()
+check(status == 200 and analytics["status"] == "CONNECTED" and analytics["privacy"]["pseudonymized"],
+      "el super admin recibe la exportación analítica seudonimizada")
+check(not any(field in serialized_series for field in ("@usb", "full_name", "diagnosis", "exact_date", "note")),
+      "la exportación no contiene identidad ni fechas exactas")
+status, body = call("GET", "/admin/analytics", token=A)
+check(status == 403, "el administrador normal no accede al análisis seudonimizado")
 status, body = call("GET", "/admin/overview", token=T)
 check(status == 403, "el terapeuta no entra a la administración")
 

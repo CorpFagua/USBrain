@@ -271,3 +271,52 @@ data class AuditEventDto(
     val detail: String? = null,
     val ip: String? = null,
 )
+
+@Serializable
+data class AnalyticsDatasetDto(
+    val status: String = "DISCONNECTED",
+    val source: String = "",
+    @SerialName("generated_at") val generatedAt: String = "",
+    val privacy: AnalyticsPrivacyDto = AnalyticsPrivacyDto(),
+    val series: List<AnalyticsSeriesDto> = emptyList(),
+    @SerialName("program_groups") val programGroups: List<AnalyticsProgramGroupDto> = emptyList(),
+    @SerialName("age_groups") val ageGroups: List<AnalyticsProgramGroupDto> = emptyList(),
+)
+
+@Serializable
+data class AnalyticsPrivacyDto(
+    val pseudonymized: Boolean = false,
+    val fields: List<String> = emptyList(),
+    val excluded: List<String> = emptyList(),
+)
+
+@Serializable
+data class AnalyticsSeriesDto(
+    val id: String,
+    val behavior: String,
+    val dimension: String,
+    val unit: String,
+    @SerialName("expected_direction") val expectedDirection: String = "DECREASE",
+    val baseline: List<AnalyticsPointDto> = emptyList(),
+    val intervention: List<AnalyticsPointDto> = emptyList(),
+)
+
+@Serializable
+data class AnalyticsPointDto(
+    val session: Int,
+    val value: Double,
+    /** Día relativo al inicio de la serie; nunca es una fecha real. */
+    val day: Int = session,
+    /** Fecha del registro diario, necesaria para construir la serie cronológica autorizada. */
+    val date: String? = null,
+)
+
+@Serializable
+data class AnalyticsProgramGroupDto(
+    val program: String,
+    val dimension: String,
+    val unit: String,
+    @SerialName("participants") val participants: Int,
+    @SerialName("baseline_mean") val baselineMean: Double,
+    @SerialName("intervention_mean") val interventionMean: Double,
+)

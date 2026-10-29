@@ -176,6 +176,30 @@ Permisos: el **paciente** ve solo su caso y es el único que registra sus activi
 existiera); el **administrador** ve todo en modo lectura. Una actividad recurrente aparece
 pendiente cada día hasta que se registra ese día.
 
+## Exportación analítica segura (`/ords/usbrain/v1/admin/analytics`)
+
+`GET admin/analytics` requiere Bearer y el permiso sensible `analytics.view`, asignado por defecto
+únicamente a `SUPERADMIN`. APEX no es otra base ni necesita una conexión adicional: APEX y ORDS
+consultan el mismo esquema Oracle `USBRAIN`.
+
+La respuesta contiene exclusivamente series aptas para comparar línea base e intervención:
+
+- identificador seudónimo derivado mediante SHA-256;
+- nombre de la conducta y dimensión de medición;
+- fase, número ordinal de sesión y valor.
+
+No exporta nombres, correos, documentos, diagnósticos ni notas. La fecha de observación se entrega
+al superadministrador autorizado porque es necesaria para sumar episodios por día y ordenar la serie.
+Una serie aparece
+solo cuando dispone de al menos tres observaciones en cada fase. La aplicación utiliza todos los
+valores para la comparación estadística y reduce únicamente los puntos dibujados cuando la gráfica
+sería demasiado densa.
+
+Cada punto incluye el total diario y su fecha de observación para construir las vistas cronológica,
+semanal, mensual y de calendario. Los agregados por programa académico se devuelven únicamente
+cuando existen al menos tres participantes en el grupo; son descriptivos y no deben interpretarse
+como evidencia causal sobre una carrera.
+
 Alta de pacientes (SQL o APEX):
 
 ```sql

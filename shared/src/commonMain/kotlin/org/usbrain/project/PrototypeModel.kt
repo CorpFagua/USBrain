@@ -19,6 +19,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.usbrain.project.data.AdminOverviewDto
+import org.usbrain.project.data.AnalyticsDatasetDto
 import org.usbrain.project.data.ApiException
 import org.usbrain.project.data.Enrollment
 import org.usbrain.project.data.SessionExpiredException
@@ -139,7 +140,7 @@ enum class Screen {
     // pantalla se mantenga enfocada solo en las conductas del caso.
     THERAPIST_HOME, THERAPIST_PATIENT, THERAPIST_PATIENT_INFO, THERAPIST_BEHAVIOR, THERAPIST_TASK_DETAIL,
     THERAPIST_NEW_BEHAVIOR, THERAPIST_BASELINE_SETUP, THERAPIST_NEW_TASK, THERAPIST_NEW_WIDGET, THERAPIST_ASSIGNED, THERAPIST_PROFILE,
-    ADMIN_HOME, ADMIN_USERS, ADMIN_USER_EDIT, ADMIN_ROLES, ADMIN_ROLE_EDIT, ADMIN_PROFILE,
+    ADMIN_HOME, ADMIN_ANALYTICS, ADMIN_USERS, ADMIN_USER_EDIT, ADMIN_ROLES, ADMIN_ROLE_EDIT, ADMIN_PROFILE,
 }
 
 data class PasswordAssessment(
@@ -262,6 +263,7 @@ private fun defaultRoleProfiles(): List<RoleProfile> = listOf(
         homeScreen = Screen.ADMIN_HOME,
         tabs = listOf(
             NavTab(Screen.ADMIN_HOME, "Panel", "home"),
+            NavTab(Screen.ADMIN_ANALYTICS, "Análisis", "chart", permission = "analytics.view"),
             // Cada pestaña aparece solo si el rol tiene el permiso (roles dinámicos).
             NavTab(Screen.ADMIN_USERS, "Usuarios", "users", permission = "users.view"),
             NavTab(Screen.ADMIN_ROLES, "Roles", "shield", permission = "roles.manage"),
@@ -514,6 +516,8 @@ class PrototypeState(
 
     // --- Administración ---
     var adminData by mutableStateOf<AdminOverviewDto?>(null)
+    var analyticsData by mutableStateOf<AnalyticsDatasetDto?>(null)
+    var analyticsError by mutableStateOf<String?>(null)
     var adminError by mutableStateOf<String?>(null)
     var adminInfo by mutableStateOf<String?>(null)
     var editingUserId by mutableStateOf<String?>(null)
@@ -1111,6 +1115,23 @@ class PrototypeState(
                 adminError = e.message
             } catch (e: Exception) {
                 adminError = "No se pudo conectar con el servidor."
+            }
+        }
+    }
+
+    fun loadAnalytics() {
+        analyticsError = null
+        scope.launch {
+            try {
+                analyticsData = api.adminAnalytics()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SessionExpiredException) {
+                endSession(e.message)
+            } catch (e: ApiException) {
+                analyticsError = e.message
+            } catch (e: Exception) {
+                analyticsError = "No se pudo obtener la exportación seudonimizada desde ORDS."
             }
         }
     }

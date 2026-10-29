@@ -113,6 +113,8 @@ using (
          'Crea usuarios, cambia su rol, los deshabilita, desbloquea y restablece su acceso.' from dual union all
   select 'roles.manage', 'Gestionar roles y permisos', 'Administración',
          'Crea, edita y borra roles y decide qué permisos tiene cada uno.' from dual union all
+  select 'analytics.view', 'Ver análisis estadístico', 'Administración',
+         'Consulta series seudonimizadas y resultados exploratorios de hipótesis.' from dual union all
   select 'audit.view', 'Ver bitácora de seguridad', 'Administración',
          'Consulta los inicios de sesión, fallos, bloqueos y cambios de administración.' from dual
 ) s on (p.permission_id = s.id)
