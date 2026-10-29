@@ -10,6 +10,10 @@
 --   3. Nadie cambia su propio rol ni se deshabilita a sí mismo.
 --   4. Siempre queda al menos un usuario activo con roles.manage.
 --   5. El rol SUPERADMIN (is_locked) no se edita ni se borra; los roles semilla no se borran.
+--   6. Permisos individuales (usb_user_permissions): solo con users.permissions, nunca
+--      sobre uno mismo ni sobre un SUPERADMIN, solo con permisos que el actor tiene, y
+--      cada excepción lleva motivo (y, si es temporal, fecha de vencimiento).
+--   Las reglas 2 y 4 miran los permisos EFECTIVOS (rol + excepciones), no solo el rol.
 -- =============================================================================
 whenever sqlerror exit failure rollback
 set define off feedback off
@@ -26,6 +30,9 @@ create or replace package usb_admin authid definer as
   procedure update_user(p_user_id number, p_request json_object_t);
   -- p_action: 'unlock' | 'reset_mfa' | 'set_password'
   procedure user_action(p_user_id number, p_action varchar2, p_password varchar2);
+  -- Reemplaza las excepciones del usuario: {"overrides": [{"permission", "effect": GRANT|DENY,
+  -- "reason", "expires_at": "AAAA-MM-DD" (opcional, válido hasta ese día inclusive)}]}.
+  procedure set_user_permissions(p_user_id number, p_request json_object_t);
 
   procedure create_role(p_request json_object_t);
   procedure update_role(p_role_id varchar2, p_request json_object_t);
@@ -36,7 +43,9 @@ end usb_admin;
 
 create or replace package body usb_admin as
 
-  c_manager_permission constant varchar2(30) := 'roles.manage';
+  c_manager_permission  constant varchar2(30) := 'roles.manage';
+  c_override_permission constant varchar2(30) := 'users.permissions';
+  c_timezone            constant varchar2(30) := 'America/Bogota';
 
   procedure fail(p_code pls_integer, p_slug varchar2, p_message varchar2) is
   begin
@@ -82,6 +91,18 @@ create or replace package body usb_admin as
     end loop;
   end require_can_grant_role;
 
+  -- Regla 2 sobre permisos efectivos: un GRANT individual también "sube" al usuario.
+  procedure require_can_manage_user(p_user_id number, p_message varchar2) is
+  begin
+    for ep in (select ep.permission_id from usb_effective_permissions ep
+                 join usb_permissions p on p.permission_id = ep.permission_id
+                where ep.user_id = p_user_id and p.sensitive) loop
+      if not usb_auth.has_permission(ep.permission_id) then
+        fail(usb_auth.e_forbidden, 'forbidden', p_message);
+      end if;
+    end loop;
+  end require_can_manage_user;
+
   function role_has(p_role_id varchar2, p_permission varchar2) return boolean is
     l_count number;
   begin
@@ -90,13 +111,24 @@ create or replace package body usb_admin as
     return l_count > 0;
   end role_has;
 
+  -- ¿Tendría el usuario este permiso con este rol, contando sus excepciones vigentes?
+  function would_have(p_user_id number, p_role_id varchar2, p_permission varchar2) return boolean is
+    l_effect usb_user_permissions.effect%type;
+  begin
+    select max(effect) into l_effect from usb_user_permissions
+     where user_id = p_user_id and permission_id = p_permission
+       and (expires_at is null or expires_at > systimestamp);
+    return case l_effect when 'GRANT' then true when 'DENY' then false
+                         else role_has(p_role_id, p_permission) end;
+  end would_have;
+
   -- Regla 4: ¿cuántos usuarios activos con roles.manage quedan sin contar a este?
   function other_managers(p_user_id number) return number is
     l_count number;
   begin
     select count(*) into l_count
-      from usb_users u join usb_role_permissions rp on rp.role_id = u.role
-     where rp.permission_id = c_manager_permission and u.status = 'ACTIVE' and u.user_id != p_user_id;
+      from usb_users u join usb_effective_permissions ep on ep.user_id = u.user_id
+     where ep.permission_id = c_manager_permission and u.status = 'ACTIVE' and u.user_id != p_user_id;
     return l_count;
   end other_managers;
 
@@ -162,7 +194,24 @@ create or replace package body usb_admin as
                  'last_login_at' value to_char(sys_extract_utc(u.last_login_at), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
                  'is_patient' value case when p.user_id is not null then 'true' else 'false' end format json,
                  'therapist_id' value to_char(p.therapist_id),
-                 'therapist_name' value t.full_name)
+                 'therapist_name' value t.full_name,
+                 'permissions' value (select json_arrayagg(ep.permission_id order by ep.permission_id returning json)
+                                        from usb_effective_permissions ep where ep.user_id = u.user_id),
+                 'overrides' value (
+                   select json_arrayagg(json_object(
+                            'permission' value up.permission_id,
+                            'effect' value up.effect,
+                            'reason' value up.reason,
+                            -- Último día válido (se guarda como el inicio del día siguiente).
+                            'expires_at' value to_char((up.expires_at - interval '1' second) at time zone 'America/Bogota', 'YYYY-MM-DD'),
+                            'active' value case when up.expires_at is null or up.expires_at > systimestamp
+                                                then 'true' else 'false' end format json,
+                            'granted_by' value g.full_name,
+                            'created_at' value to_char(sys_extract_utc(up.created_at), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+                          order by up.permission_id returning json)
+                     from usb_user_permissions up
+                     left join usb_users g on g.user_id = up.granted_by
+                    where up.user_id = u.user_id))
                order by u.full_name returning json)
           from usb_users u
           join usb_roles r on r.role_id = u.role
@@ -183,7 +232,8 @@ create or replace package body usb_admin as
           from usb_roles r),
       'permissions' value (
         select json_arrayagg(json_object('id' value p.permission_id, 'name' value p.name,
-                                         'category' value p.category, 'description' value p.description)
+                                         'category' value p.category, 'description' value p.description,
+                                         'sensitive' value p.sensitive)
                              order by p.category, p.permission_id returning json)
           from usb_permissions p),
       'therapists' value (
@@ -192,8 +242,8 @@ create or replace package body usb_admin as
           from usb_users u
           join usb_roles r on r.role_id = u.role
          where u.status = 'ACTIVE' and r.app_profile = 'THERAPIST'
-           and exists (select 1 from usb_role_permissions rp
-                        where rp.role_id = u.role and rp.permission_id = 'case.view.assigned')),
+           and exists (select 1 from usb_effective_permissions ep
+                        where ep.user_id = u.user_id and ep.permission_id = 'case.view.assigned')),
       'events' value case when l_audit = 1 then (
         select json_arrayagg(json_object(
                  'at' value to_char(sys_extract_utc(e.created_at), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
@@ -416,7 +466,7 @@ create or replace package body usb_admin as
     l_role         usb_roles%rowtype;
   begin
     usb_auth.require_permission('users.manage');
-    require_can_grant_role(l_user.role, 'No puedes modificar a un usuario con más permisos de administración que tú.');
+    require_can_manage_user(p_user_id, 'No puedes modificar a un usuario con más permisos de administración que tú.');
     l_role := load_role(l_new_role);
     if l_new_status not in ('ACTIVE', 'DISABLED') then
       fail(usb_auth.e_bad_request, 'invalid_status', 'Estado no válido.');
@@ -432,8 +482,8 @@ create or replace package body usb_admin as
              'Un paciente solo puede pasar a otro rol de paciente, y viceversa.');
       end if;
     end if;
-    if role_has(l_user.role, c_manager_permission) and l_user.status = 'ACTIVE'
-       and (not role_has(l_new_role, c_manager_permission) or l_new_status != 'ACTIVE')
+    if usb_auth.user_has_permission(p_user_id, c_manager_permission)
+       and (not would_have(p_user_id, l_new_role, c_manager_permission) or l_new_status != 'ACTIVE')
        and other_managers(p_user_id) = 0 then
       fail(usb_auth.e_conflict, 'last_manager', 'Debe quedar al menos un super administrador activo.');
     end if;
@@ -465,7 +515,7 @@ create or replace package body usb_admin as
     l_user usb_users%rowtype := load_user(p_user_id);
   begin
     usb_auth.require_permission('users.manage');
-    require_can_grant_role(l_user.role, 'No puedes modificar a un usuario con más permisos de administración que tú.');
+    require_can_manage_user(p_user_id, 'No puedes modificar a un usuario con más permisos de administración que tú.');
     if p_user_id = actor then
       fail(usb_auth.e_forbidden, 'forbidden', 'Para tu propia cuenta usa las opciones de tu perfil.');
     end if;
@@ -477,6 +527,120 @@ create or replace package body usb_admin as
     end case;
     usb_auth.log_event('ADMIN_USER_' || upper(p_action), p_user_id, 'por=' || actor);
   end user_action;
+
+  -- ---------------------------------------------------------------------------
+  -- Permisos individuales (excepciones sobre el rol)
+  -- ---------------------------------------------------------------------------
+
+  procedure set_user_permissions(p_user_id number, p_request json_object_t) is
+    type t_override is record (
+      permission_id usb_user_permissions.permission_id%type,
+      effect        usb_user_permissions.effect%type,
+      reason        usb_user_permissions.reason%type,
+      expires_at    usb_user_permissions.expires_at%type);
+    type t_overrides is table of t_override index by pls_integer;
+    type t_seen is table of boolean index by varchar2(60);
+    l_user      usb_users%rowtype := load_user(p_user_id);
+    l_role      usb_roles%rowtype := load_role(l_user.role);
+    l_list      json_array_t := p_request.get_array('overrides');
+    l_item      json_object_t;
+    l_expires   varchar2(30);
+    l_new       t_overrides;
+    l_seen      t_seen;
+    l_manager   boolean := role_has(l_user.role, c_manager_permission);
+    l_actor_id  number := actor;
+    l_count     number;
+    l_detail    varchar2(1000);
+  begin
+    usb_auth.require_permission(c_override_permission);
+    if l_list is null then
+      fail(usb_auth.e_bad_request, 'missing_fields', 'Envía la lista de permisos individuales (overrides).');
+    end if;
+    if p_user_id = actor then
+      fail(usb_auth.e_forbidden, 'forbidden', 'No puedes cambiar tus propios permisos.');
+    end if;
+    if l_role.is_locked then
+      fail(usb_auth.e_forbidden, 'role_locked', 'El super administrador ya tiene todos los permisos: no admite excepciones.');
+    end if;
+    require_can_manage_user(p_user_id, 'No puedes modificar a un usuario con más permisos de administración que tú.');
+    -- Tampoco se borra una excepción sobre un permiso que el actor no tiene.
+    for up in (select permission_id from usb_user_permissions where user_id = p_user_id) loop
+      if not usb_auth.has_permission(up.permission_id) then
+        fail(usb_auth.e_forbidden, 'forbidden',
+             'El usuario tiene una excepción sobre un permiso que tú no tienes: ' || up.permission_id || '.');
+      end if;
+    end loop;
+
+    for i in 0 .. l_list.get_size - 1 loop
+      if not l_list.get(i).is_object then
+        fail(usb_auth.e_bad_request, 'invalid_override', 'Cada excepción debe ser un objeto.');
+      end if;
+      l_item := treat(l_list.get(i) as json_object_t);
+      l_new(i).permission_id := substr(l_item.get_string('permission'), 1, 60);
+      l_new(i).effect := upper(l_item.get_string('effect'));
+      l_new(i).reason := substr(trim(l_item.get_string('reason')), 1, 400);
+      l_expires := l_item.get_string('expires_at');
+
+      select count(*) into l_count from usb_permissions where permission_id = l_new(i).permission_id;
+      if l_count = 0 then
+        fail(usb_auth.e_bad_request, 'invalid_permission', 'El permiso ' || l_new(i).permission_id || ' no existe.');
+      end if;
+      if l_seen.exists(l_new(i).permission_id) then
+        fail(usb_auth.e_bad_request, 'duplicate_override', 'El permiso ' || l_new(i).permission_id || ' está repetido.');
+      end if;
+      l_seen(l_new(i).permission_id) := true;
+      if l_new(i).effect is null or l_new(i).effect not in ('GRANT', 'DENY') then
+        fail(usb_auth.e_bad_request, 'invalid_effect', 'Cada excepción es GRANT (otorgar) o DENY (quitar).');
+      end if;
+      if not usb_auth.has_permission(l_new(i).permission_id) then
+        fail(usb_auth.e_forbidden, 'forbidden',
+             'No puedes otorgar ni quitar un permiso que tú no tienes: ' || l_new(i).permission_id || '.');
+      end if;
+      -- Una excepción que no cambia nada solo confunde al auditar.
+      if (l_new(i).effect = 'GRANT') = role_has(l_user.role, l_new(i).permission_id) then
+        fail(usb_auth.e_bad_request, 'redundant_override',
+             case l_new(i).effect when 'GRANT' then 'El rol ya incluye ' else 'El rol no incluye ' end
+             || l_new(i).permission_id || '.');
+      end if;
+      if l_new(i).reason is null then
+        fail(usb_auth.e_bad_request, 'missing_reason', 'Escribe el motivo de cada permiso individual.');
+      end if;
+      if l_expires is not null then
+        begin
+          -- Vale hasta el final de ese día, hora de Colombia.
+          l_new(i).expires_at := from_tz(cast(to_date(l_expires, 'YYYY-MM-DD') + 1 as timestamp), c_timezone);
+        exception
+          when others then
+            fail(usb_auth.e_bad_request, 'invalid_date', 'La fecha de vencimiento no es válida (AAAA-MM-DD).');
+        end;
+        if l_new(i).expires_at <= systimestamp then
+          fail(usb_auth.e_bad_request, 'invalid_date', 'La fecha de vencimiento ya pasó.');
+        end if;
+      end if;
+      if l_new(i).permission_id = c_manager_permission then
+        l_manager := l_new(i).effect = 'GRANT';
+      end if;
+    end loop;
+
+    if usb_auth.user_has_permission(p_user_id, c_manager_permission) and not l_manager
+       and other_managers(p_user_id) = 0 then
+      fail(usb_auth.e_conflict, 'last_manager', 'Debe quedar al menos un super administrador activo.');
+    end if;
+
+    -- Validado todo: se escribe. Los permisos se evalúan en cada petición, así que
+    -- aplican de inmediato sin cerrar sus sesiones.
+    delete from usb_user_permissions where user_id = p_user_id;
+    for i in 0 .. l_list.get_size - 1 loop
+      insert into usb_user_permissions (user_id, permission_id, effect, reason, expires_at, granted_by)
+      values (p_user_id, l_new(i).permission_id, l_new(i).effect, l_new(i).reason, l_new(i).expires_at, l_actor_id);
+      l_detail := substr(l_detail || case l_new(i).effect when 'GRANT' then '+' else '-' end
+                         || l_new(i).permission_id
+                         || case when l_new(i).expires_at is not null
+                                 then '@' || to_char(l_new(i).expires_at - interval '1' second, 'YYYY-MM-DD') end
+                         || ' ', 1, 900);
+    end loop;
+    usb_auth.log_event('ADMIN_USER_PERMISSIONS', p_user_id, nvl(l_detail, 'sin excepciones ') || 'por=' || actor);
+  end set_user_permissions;
 
   -- ---------------------------------------------------------------------------
   -- Roles
@@ -589,9 +753,15 @@ create or replace package body usb_admin as
     validate_permissions(l_permissions);
     if l_permissions is not null and role_has(p_role_id, c_manager_permission)
        and not includes(l_permissions, c_manager_permission) then
+      -- Quedan: los de otros roles con roles.manage efectivo y los de este rol con un GRANT propio.
       select count(*) into l_managers
-        from usb_users u join usb_role_permissions rp on rp.role_id = u.role
-       where rp.permission_id = c_manager_permission and u.status = 'ACTIVE' and u.role != p_role_id;
+        from usb_users u join usb_effective_permissions ep on ep.user_id = u.user_id
+       where ep.permission_id = c_manager_permission and u.status = 'ACTIVE'
+         and (u.role != p_role_id
+              or exists (select 1 from usb_user_permissions up
+                          where up.user_id = u.user_id and up.permission_id = c_manager_permission
+                            and up.effect = 'GRANT'
+                            and (up.expires_at is null or up.expires_at > systimestamp)));
       if l_managers = 0 then
         fail(usb_auth.e_conflict, 'last_manager', 'Debe quedar al menos un super administrador activo.');
       end if;

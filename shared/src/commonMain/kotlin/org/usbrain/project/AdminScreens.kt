@@ -42,6 +42,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.usbrain.project.data.AdminRoleDto
 import org.usbrain.project.data.AdminUserDto
+import org.usbrain.project.data.PermissionDto
+import org.usbrain.project.data.UserOverrideDto
 
 private val PROFILE_LABELS = mapOf("PATIENT" to "Paciente", "THERAPIST" to "Terapeuta", "ADMIN" to "Administración")
 
@@ -139,6 +141,7 @@ private fun eventLabel(type: String): String = when (type) {
     "PASSWORD_CHANGED" -> "Contraseña cambiada"
     "ADMIN_USER_CREATED" -> "Usuario creado"
     "ADMIN_USER_UPDATED" -> "Usuario modificado"
+    "ADMIN_USER_PERMISSIONS" -> "Permisos individuales modificados"
     "ROLE_CREATED" -> "Rol creado"
     "ROLE_UPDATED" -> "Rol modificado"
     "ROLE_DELETED" -> "Rol borrado"
@@ -186,6 +189,9 @@ private fun UserRow(user: AdminUserDto, enabled: Boolean, onClick: () -> Unit) {
                 }
                 Pill(if (user.mfaEnabled) "2FA activo" else "Sin 2FA", MaterialTheme.colorScheme.onSurfaceVariant)
                 user.therapistName?.let { Pill("Terapeuta: $it", MaterialTheme.colorScheme.onSurfaceVariant) }
+                user.overrides.count { it.active }.takeIf { it > 0 }?.let {
+                    Pill(if (it == 1) "1 permiso individual" else "$it permisos individuales", Brand.Orange)
+                }
             }
         }
     }
@@ -207,7 +213,7 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
         BackHeader(if (editing == null) "Nuevo usuario" else "Editar usuario") { state.screen = Screen.ADMIN_USERS }
         if (editing == null) {
             OutlinedTextField(
-                state.draftUserEmail, { state.draftUserEmail = it.trim() }, Modifier.fillMaxWidth(),
+                state.draftUserEmail, { state.draftUserEmail = sanitizeEmailInput(it) }, Modifier.fillMaxWidth(),
                 label = { Text("Correo") }, singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
             )
@@ -316,8 +322,127 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
                 Modifier.fillMaxWidth(),
                 enabled = actionPasswordAssessment.isValid,
             ) { Text("Restablecer contraseña") }
+            // El super administrador ya tiene todo, y nadie ajusta sus propios permisos (lo valida también el servidor).
+            val role = roles.firstOrNull { it.id == user.role }
+            if (state.can("users.permissions") && role != null && !role.isLocked && user.id != state.sessionUser?.id?.toString()) {
+                UserPermissionsSection(state, user, role)
+            }
         }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/** Excepciones sobre el rol para ESTE usuario: otorgar o quitar un permiso sin cambiarle el rol. */
+@Composable
+private fun UserPermissionsSection(state: PrototypeState, user: AdminUserDto, role: AdminRoleDto) {
+    val existing = user.overrides.filter { it.active }.associateBy { it.permission }
+    val changed = state.draftOverrides.any { (permission, effect) -> existing[permission]?.effect != effect } ||
+        existing.keys.any { it !in state.draftOverrides }
+    val (included, notIncluded) = state.adminData?.permissions.orEmpty().partition { it.id in role.permissions }
+    SectionLabel("Permisos individuales")
+    Text(
+        "Ajusta permisos solo para ${user.fullName}, sin cambiar su rol ni afectar a los demás usuarios con el rol ${role.name}. " +
+            "Aplica de inmediato.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    PermissionGroup(
+        title = "Ya incluidos en su rol ${role.name} (${included.size})",
+        hint = "Los tiene por su rol. Puedes quitarle alguno solo a esta persona.",
+        permissions = included,
+        fromRole = true,
+        state = state,
+        existing = existing,
+    )
+    PermissionGroup(
+        title = "No incluidos en su rol (${notIncluded.size})",
+        hint = "Su rol no los da. Puedes otorgarle alguno solo a esta persona.",
+        permissions = notIncluded,
+        fromRole = false,
+        state = state,
+        existing = existing,
+    )
+    OutlinedTextField(
+        state.draftOverrideReason, { state.draftOverrideReason = it }, Modifier.fillMaxWidth(),
+        label = { Text("Motivo (obligatorio para los cambios)") }, minLines = 2,
+    )
+    FieldLabel("Vence (opcional, válido hasta ese día inclusive)")
+    CalendarField(
+        value = state.draftOverrideExpiry,
+        placeholder = "Sin vencimiento",
+        onDateSelected = { state.draftOverrideExpiry = it },
+    )
+    if (state.draftOverrideExpiry.isNotBlank()) {
+        OutlinedButton(onClick = { state.draftOverrideExpiry = "" }, Modifier.fillMaxWidth()) { Text("Quitar vencimiento") }
+    }
+    Button(
+        onClick = { state.saveUserPermissions() },
+        Modifier.fillMaxWidth().height(50.dp),
+        enabled = !state.busy && changed,
+    ) { Text("Guardar permisos individuales") }
+}
+
+@Composable
+private fun PermissionGroup(
+    title: String,
+    hint: String,
+    permissions: List<PermissionDto>,
+    fromRole: Boolean,
+    state: PrototypeState,
+    existing: Map<String, UserOverrideDto>,
+) {
+    if (permissions.isEmpty()) return
+    val s = LocalUsBrainSemantic.current
+    // Solo se ofrece la excepción que cambia algo: quitar lo que el rol da, otorgar lo que no da.
+    val overrideEffect = if (fromRole) "DENY" else "GRANT"
+    FieldLabel(title)
+    Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    permissions.forEach { permission ->
+        val overridden = state.draftOverrides[permission.id] == overrideEffect
+        val hasIt = fromRole != overridden
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (hasIt) "✓" else "✕",
+                        color = if (hasIt) s.success else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(permission.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        Text(permission.category, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (permission.sensitive) Pill("Sensible", MaterialTheme.colorScheme.error)
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Pill(if (fromRole) "Incluido en el rol" else "No incluido en el rol",
+                        if (fromRole) s.success else MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (overridden) {
+                        Pill(if (fromRole) "Quitado solo a esta persona" else "Otorgado solo a esta persona",
+                            if (fromRole) MaterialTheme.colorScheme.error else Brand.Orange)
+                    }
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TabChip(!overridden, { state.setOverride(permission.id, null) },
+                        if (fromRole) "Mantener (según rol)" else "No otorgar (según rol)",
+                        MaterialTheme.colorScheme.onSurfaceVariant)
+                    TabChip(overridden, { state.setOverride(permission.id, overrideEffect) },
+                        if (fromRole) "Quitar a esta persona" else "Otorgar a esta persona",
+                        if (fromRole) MaterialTheme.colorScheme.error else Brand.Orange)
+                }
+                existing[permission.id]?.takeIf { overridden && it.effect == overrideEffect }?.let { o ->
+                    Text(
+                        listOfNotNull(
+                            o.reason,
+                            o.expiresAt?.let { "vence $it" } ?: "sin vencimiento",
+                            o.grantedBy?.let { "por $it" },
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
     }
 }
 

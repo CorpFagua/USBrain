@@ -35,6 +35,7 @@ begin
   endpoint('users',             'POST',   'begin usb_admin_api.create_user(:authorization, :body_text); end;');
   endpoint('users/:id',         'POST',   'begin usb_admin_api.update_user(:authorization, :id, :body_text); end;');
   endpoint('users/:id/actions', 'POST',   'begin usb_admin_api.user_action(:authorization, :id, :body_text); end;');
+  endpoint('users/:id/permissions', 'POST', 'begin usb_admin_api.set_user_permissions(:authorization, :id, :body_text); end;');
   endpoint('roles',             'POST',   'begin usb_admin_api.create_role(:authorization, :body_text); end;');
   endpoint('roles/:id',         'POST',   'begin usb_admin_api.update_role(:authorization, :id, :body_text); end;');
   endpoint('roles/:id',         'DELETE', 'begin usb_admin_api.delete_role(:authorization, :id); end;');

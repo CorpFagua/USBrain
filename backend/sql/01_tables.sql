@@ -17,7 +17,7 @@ create table if not exists usb_auth_config (
 merge into usb_auth_config c
 using (
   select 'ACCESS_TTL_SECONDS' k, '600' v, 'Vida del access token (segundos). Corto, como en la banca.' d from dual union all
-  select 'REFRESH_IDLE_DAYS', '30', 'Días sin abrir la app antes de exigir login + 2FA de nuevo.' from dual union all
+  select 'REFRESH_IDLE_MINUTES', '30', 'Minutos sin actividad antes de exigir login + 2FA de nuevo.' from dual union all
   select 'SESSION_ABSOLUTE_DAYS', '90', 'Vida máxima de una sesión aunque se use a diario.' from dual union all
   select 'CHALLENGE_TTL_SECONDS', '300', 'Tiempo para ingresar el código 2FA tras la contraseña.' from dual union all
   select 'CHALLENGE_MAX_ATTEMPTS', '5', 'Intentos de código 2FA por desafío.' from dual union all
@@ -25,10 +25,12 @@ using (
   select 'LOCKOUT_MINUTES', '15', 'Duración del bloqueo temporal de la cuenta.' from dual union all
   select 'PBKDF2_ITERATIONS', '310000', 'Iteraciones PBKDF2-HMAC-SHA256 para contraseñas nuevas.' from dual union all
   select 'TOTP_WINDOW_STEPS', '1', 'Pasos de 30 s de tolerancia al desfase de reloj.' from dual union all
-  select 'MAX_SESSIONS_PER_USER', '5', 'Dispositivos con sesión simultánea por usuario.' from dual union all
+  select 'MAX_SESSIONS_PER_USER', '1', 'Sesiones activas por usuario. Con 1, iniciar sesión en otro dispositivo o pestaña cierra la anterior.' from dual union all
   select 'TOTP_ISSUER', 'USBrain', 'Nombre que muestra la app autenticadora.' from dual
 ) s on (c.config_key = s.k)
 when not matched then insert (config_key, config_value, description) values (s.k, s.v, s.d);
+
+delete from usb_auth_config where config_key = 'REFRESH_IDLE_DAYS';
 
 -- Llaves de la aplicación. En producción: mover a Oracle Wallet / TDE.
 create table if not exists usb_app_keys (
@@ -113,6 +115,8 @@ using (
          'Crea usuarios, cambia su rol, los deshabilita, desbloquea y restablece su acceso.' from dual union all
   select 'roles.manage', 'Gestionar roles y permisos', 'Administración',
          'Crea, edita y borra roles y decide qué permisos tiene cada uno.' from dual union all
+  select 'users.permissions', 'Otorgar permisos individuales', 'Administración',
+         'Da o quita un permiso a un usuario concreto sin cambiar su rol (con motivo y vencimiento opcional).' from dual union all
   select 'analytics.view', 'Ver análisis estadístico', 'Administración',
          'Consulta series seudonimizadas y resultados exploratorios de hipótesis.' from dual union all
   select 'audit.view', 'Ver bitácora de seguridad', 'Administración',
@@ -182,6 +186,39 @@ create table if not exists usb_users (
   constraint usb_users_role_fk foreign key (role) references usb_roles,
   constraint usb_users_status_ck check (status in ('ACTIVE', 'DISABLED'))
 );
+
+-- Excepciones por usuario sobre su rol (separación de roles): dar o quitar UN permiso
+-- a UNA persona sin crear un rol nuevo ni tocar a los demás usuarios del rol.
+--   GRANT: lo tiene aunque su rol no lo incluya.   DENY: no lo tiene aunque su rol sí.
+--   reason:     justificación obligatoria (queda en la bitácora).
+--   expires_at: acceso temporal; vencido deja de aplicar solo, sin ningún proceso.
+create table if not exists usb_user_permissions (
+  user_id       number       not null references usb_users on delete cascade,
+  permission_id varchar2(60) not null references usb_permissions,
+  effect        varchar2(5)  not null,
+  reason        varchar2(400) not null,
+  expires_at    timestamp with time zone,
+  granted_by    number references usb_users on delete set null,
+  created_at    timestamp with time zone default systimestamp not null,
+  constraint usb_user_permissions_pk primary key (user_id, permission_id),
+  constraint usb_user_permissions_effect_ck check (effect in ('GRANT', 'DENY'))
+);
+
+-- Permisos EFECTIVOS = (los del rol − DENY vigentes) ∪ GRANT vigentes.
+-- Es la única fuente de verdad: todo chequeo de permisos lee de aquí (el estado
+-- ACTIVE lo filtra quien consulta).
+create or replace view usb_effective_permissions as
+select u.user_id, rp.permission_id
+  from usb_users u
+  join usb_role_permissions rp on rp.role_id = u.role
+ where not exists (select 1 from usb_user_permissions up
+                    where up.user_id = u.user_id and up.permission_id = rp.permission_id
+                      and up.effect = 'DENY'
+                      and (up.expires_at is null or up.expires_at > systimestamp))
+union
+select up.user_id, up.permission_id
+  from usb_user_permissions up
+ where up.effect = 'GRANT' and (up.expires_at is null or up.expires_at > systimestamp);
 
 -- Desafío intermedio entre "contraseña correcta" y "código 2FA correcto".
 create table if not exists usb_login_challenges (

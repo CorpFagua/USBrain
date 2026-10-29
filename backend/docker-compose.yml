@@ -34,6 +34,8 @@ services:
       ORACLE_PWD: ${ORACLE_PWD}
       # Contraseña de los usuarios internos de ORDS (ORDS_PUBLIC_USER…). La imagen la exige.
       ORACLE_USER_PWD: ${ORACLE_PWD}
+      # Contraseña requerida para instalar APEX; en desarrollo puede usar la de SYS.
+      APEX_PWD: ${APEX_PWD:-${ORACLE_PWD}}
     ports:
       - "${ORDS_PORT:-8080}:8080"
     volumes:

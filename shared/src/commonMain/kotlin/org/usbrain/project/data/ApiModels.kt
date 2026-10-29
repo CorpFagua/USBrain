@@ -238,6 +238,21 @@ data class AdminUserDto(
     @SerialName("is_patient") val isPatient: Boolean = false,
     @SerialName("therapist_id") val therapistId: String? = null,
     @SerialName("therapist_name") val therapistName: String? = null,
+    // Permisos efectivos (rol + excepciones vigentes) y las excepciones individuales.
+    val permissions: List<String> = emptyList(),
+    val overrides: List<UserOverrideDto> = emptyList(),
+)
+
+/** Excepción individual sobre el rol: GRANT (otorga) o DENY (quita) un permiso a un solo usuario. */
+@Serializable
+data class UserOverrideDto(
+    val permission: String,
+    val effect: String,
+    val reason: String = "",
+    // Último día válido (AAAA-MM-DD); null = sin vencimiento.
+    @SerialName("expires_at") val expiresAt: String? = null,
+    val active: Boolean = true,
+    @SerialName("granted_by") val grantedBy: String? = null,
 )
 
 @Serializable
@@ -258,6 +273,7 @@ data class PermissionDto(
     val name: String,
     val category: String,
     val description: String? = null,
+    val sensitive: Boolean = false,
 )
 
 @Serializable
