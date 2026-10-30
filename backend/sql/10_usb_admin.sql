@@ -67,6 +67,23 @@ create or replace package body usb_admin as
       fail(usb_auth.e_bad_request, 'invalid_role', 'El rol no existe.');
   end load_role;
 
+  function requested_role(p_request json_object_t, p_required boolean default false) return varchar2 is
+    l_role json_element_t;
+  begin
+    if not p_request.has('role') then
+      if p_required then
+        fail(usb_auth.e_bad_request, 'invalid_role', 'Selecciona un solo rol de la lista disponible.');
+      end if;
+      return null;
+    end if;
+
+    l_role := p_request.get('role');
+    if l_role.is_array or l_role.is_object then
+      fail(usb_auth.e_bad_request, 'invalid_role', 'Cada usuario debe tener un solo rol de la lista disponible.');
+    end if;
+    return p_request.get_string('role');
+  end requested_role;
+
   function load_user(p_user_id number) return usb_users%rowtype is
     l_user usb_users%rowtype;
   begin
@@ -249,11 +266,15 @@ create or replace package body usb_admin as
                  'at' value to_char(sys_extract_utc(e.created_at), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
                  'type' value e.event_type,
                  'email' value u.email,
+                 'actor_email' value actor.email,
+                 'target_email' value target.email,
                  'detail' value e.detail,
                  'ip' value e.ip_address)
                order by e.event_id desc returning json)
           from (select * from usb_auth_events order by event_id desc fetch first 60 rows only) e
-          left join usb_users u on u.user_id = e.user_id) end
+          left join usb_users u on u.user_id = e.user_id
+          left join usb_users actor on actor.user_id = e.actor_user_id
+          left join usb_users target on target.user_id = e.target_user_id) end
       returning json) returning clob)
       into l_result
       from dual;
@@ -424,7 +445,7 @@ create or replace package body usb_admin as
     l_user_id      number;
   begin
     usb_auth.require_permission('users.manage');
-    l_role := load_role(p_request.get_string('role'));
+    l_role := load_role(requested_role(p_request, true));
     if l_role.role_id = 'SUPERADMIN' then
       select role into l_actor_role from usb_users where user_id = l_actor_id;
       if l_actor_role != 'SUPERADMIN' then
@@ -453,19 +474,21 @@ create or replace package body usb_admin as
       insert into usb_cases (patient_id, title)
       values (l_user_id, 'Caso de ' || nvl(lower(l_condition), l_full_name));
     end if;
-    usb_auth.log_event('ADMIN_USER_CREATED', l_user_id, 'rol=' || l_role.role_id || ' por=' || actor);
+    usb_auth.log_event('ADMIN_USER_CREATED', l_user_id, 'rol=' || l_role.role_id);
     return l_user_id;
   end create_user;
 
   procedure update_user(p_user_id number, p_request json_object_t) is
     l_user         usb_users%rowtype := load_user(p_user_id);
-    l_new_role     varchar2(40) := nvl(p_request.get_string('role'), l_user.role);
+    l_new_role     varchar2(40);
     l_new_status   varchar2(20) := nvl(p_request.get_string('status'), l_user.status);
     l_name         varchar2(200) := nvl(trim(p_request.get_string('full_name')), l_user.full_name);
     l_therapist_id number := to_id(p_request.get_string('therapist_id'));
+    l_detail       varchar2(900);
     l_role         usb_roles%rowtype;
   begin
     usb_auth.require_permission('users.manage');
+    l_new_role := nvl(requested_role(p_request), l_user.role);
     require_can_manage_user(p_user_id, 'No puedes modificar a un usuario con más permisos de administración que tú.');
     l_role := load_role(l_new_role);
     if l_new_status not in ('ACTIVE', 'DISABLED') then
@@ -494,6 +517,23 @@ create or replace package body usb_admin as
       require_therapist_candidate(l_therapist_id);
     end if;
 
+    if l_name != l_user.full_name then
+      l_detail := l_detail || 'nombre: ' || l_user.full_name || ' -> ' || l_name || '; ';
+    end if;
+    if l_new_role != l_user.role then
+      l_detail := l_detail || 'rol: ' || l_user.role || ' -> ' || l_new_role || '; ';
+    end if;
+    if l_new_status != l_user.status then
+      l_detail := l_detail || 'estado: ' || l_user.status || ' -> ' || l_new_status || '; ';
+    end if;
+    if l_therapist_id is not null then
+      for p in (select therapist_id from usb_patient_profiles where user_id = p_user_id) loop
+        if nvl(p.therapist_id, -1) != l_therapist_id then
+          l_detail := l_detail || 'terapeuta: ' || p.therapist_id || ' -> ' || l_therapist_id || '; ';
+        end if;
+      end loop;
+    end if;
+
     -- Validado todo: se escribe.
     update usb_users set full_name = l_name, role = l_new_role, updated_at = systimestamp
      where user_id = p_user_id;
@@ -507,8 +547,9 @@ create or replace package body usb_admin as
       -- Sus permisos cambian: que vuelva a entrar y la app cargue la interfaz nueva.
       usb_auth.revoke_all_sessions(p_user_id, 'ROLE_CHANGED');
     end if;
-    usb_auth.log_event('ADMIN_USER_UPDATED', p_user_id,
-                       'rol=' || l_new_role || ' estado=' || l_new_status || ' por=' || actor);
+    if l_detail is not null then
+      usb_auth.log_event('ADMIN_USER_UPDATED', p_user_id, rtrim(l_detail, '; '));
+    end if;
   end update_user;
 
   procedure user_action(p_user_id number, p_action varchar2, p_password varchar2) is
@@ -525,7 +566,7 @@ create or replace package body usb_admin as
       when 'set_password' then usb_auth.set_password(p_user_id, p_password);
       else fail(usb_auth.e_bad_request, 'invalid_action', 'Acción no válida.');
     end case;
-    usb_auth.log_event('ADMIN_USER_' || upper(p_action), p_user_id, 'por=' || actor);
+    usb_auth.log_event('ADMIN_USER_' || upper(p_action), p_user_id, 'acción=' || p_action);
   end user_action;
 
   -- ---------------------------------------------------------------------------
@@ -639,7 +680,7 @@ create or replace package body usb_admin as
                                  then '@' || to_char(l_new(i).expires_at - interval '1' second, 'YYYY-MM-DD') end
                          || ' ', 1, 900);
     end loop;
-    usb_auth.log_event('ADMIN_USER_PERMISSIONS', p_user_id, nvl(l_detail, 'sin excepciones ') || 'por=' || actor);
+    usb_auth.log_event('ADMIN_USER_PERMISSIONS', p_user_id, nvl(l_detail, 'sin excepciones'));
   end set_user_permissions;
 
   -- ---------------------------------------------------------------------------
@@ -709,6 +750,7 @@ create or replace package body usb_admin as
     l_profile     varchar2(20) := p_request.get_string('profile');
     l_permissions json_array_t := p_request.get_array('permissions');
     l_descr       varchar2(400) := trim(p_request.get_string('description'));
+    l_detail      varchar2(900);
     l_count       number;
   begin
     usb_auth.require_permission(c_manager_permission);
@@ -726,7 +768,13 @@ create or replace package body usb_admin as
     insert into usb_roles (role_id, name, description, app_profile)
     values (l_id, l_name, l_descr, l_profile);
     write_permissions(l_id, l_permissions);
-    usb_auth.log_event('ROLE_CREATED', actor, l_id);
+    l_detail := 'rol=' || l_id || ' nombre=' || l_name || ' perfil=' || l_profile;
+    if l_permissions is not null then
+      for i in 0 .. l_permissions.get_size - 1 loop
+        l_detail := substr(l_detail || ' +' || l_permissions.get_string(i), 1, 900);
+      end loop;
+    end if;
+    usb_auth.log_event('ROLE_CREATED', null, l_detail);
   end create_role;
 
   procedure update_role(p_role_id varchar2, p_request json_object_t) is
@@ -735,6 +783,7 @@ create or replace package body usb_admin as
     l_profile     varchar2(20) := nvl(p_request.get_string('profile'), l_role.app_profile);
     l_permissions json_array_t := p_request.get_array('permissions');
     l_descr       varchar2(400) := trim(p_request.get_string('description'));
+    l_detail      varchar2(900);
     l_users       number;
     l_managers    number;
   begin
@@ -767,6 +816,29 @@ create or replace package body usb_admin as
       end if;
     end if;
 
+    l_detail := 'rol=' || p_role_id;
+    if l_name != l_role.name then
+      l_detail := substr(l_detail || ' nombre: ' || l_role.name || ' -> ' || l_name, 1, 900);
+    end if;
+    if l_profile != l_role.app_profile then
+      l_detail := substr(l_detail || ' perfil: ' || l_role.app_profile || ' -> ' || l_profile, 1, 900);
+    end if;
+    if l_descr is not null and l_descr != l_role.description then
+      l_detail := substr(l_detail || ' descripción actualizada', 1, 900);
+    end if;
+    if l_permissions is not null then
+      for p in (select permission_id from usb_role_permissions where role_id = p_role_id) loop
+        if not includes(l_permissions, p.permission_id) then
+          l_detail := substr(l_detail || ' -' || p.permission_id, 1, 900);
+        end if;
+      end loop;
+      for i in 0 .. l_permissions.get_size - 1 loop
+        if not role_has(p_role_id, l_permissions.get_string(i)) then
+          l_detail := substr(l_detail || ' +' || l_permissions.get_string(i), 1, 900);
+        end if;
+      end loop;
+    end if;
+
     update usb_roles
        set name = l_name, app_profile = l_profile, updated_at = systimestamp,
            description = nvl(l_descr, description)
@@ -774,7 +846,7 @@ create or replace package body usb_admin as
     if l_permissions is not null then
       write_permissions(p_role_id, l_permissions);
     end if;
-    usb_auth.log_event('ROLE_UPDATED', actor, p_role_id);
+    usb_auth.log_event('ROLE_UPDATED', null, l_detail);
   end update_role;
 
   procedure delete_role(p_role_id varchar2) is
@@ -791,7 +863,7 @@ create or replace package body usb_admin as
            'El rol tiene ' || l_users || ' usuario(s). Cámbialos de rol antes de borrarlo.');
     end if;
     delete from usb_roles where role_id = p_role_id;
-    usb_auth.log_event('ROLE_DELETED', actor, p_role_id);
+    usb_auth.log_event('ROLE_DELETED', null, 'rol=' || p_role_id || ' nombre=' || l_role.name);
   end delete_role;
 
 end usb_admin;

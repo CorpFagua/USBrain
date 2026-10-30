@@ -24,6 +24,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -102,12 +103,21 @@ internal fun AdminHomeScreen(state: PrototypeState, dark: Boolean, onToggleTheme
                             Column(Modifier.weight(1f)) {
                                 Text(eventLabel(e.type), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    listOfNotNull(e.email, e.ip).joinToString(" · ").ifBlank { "—" },
+                                    "Por: ${e.actorEmail ?: "No disponible"} · Cuenta: ${e.targetEmail ?: e.email ?: e.detail ?: "—"}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
+                                e.detail?.takeIf { it.isNotBlank() }?.let {
+                                    Text(
+                                        it,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                             Text(
                                 e.at.take(16).replace('T', ' '),
@@ -116,6 +126,12 @@ internal fun AdminHomeScreen(state: PrototypeState, dark: Boolean, onToggleTheme
                             )
                         }
                     }
+                }
+                TextButton(
+                    onClick = { state.screen = Screen.ADMIN_AUDIT },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Ver bitácora completa")
                 }
             }
         }
@@ -141,11 +157,128 @@ private fun eventLabel(type: String): String = when (type) {
     "PASSWORD_CHANGED" -> "Contraseña cambiada"
     "ADMIN_USER_CREATED" -> "Usuario creado"
     "ADMIN_USER_UPDATED" -> "Usuario modificado"
+    "ADMIN_USER_UNLOCK" -> "Cuenta desbloqueada por administración"
+    "ADMIN_USER_RESET_MFA" -> "2FA restablecido por administración"
+    "ADMIN_USER_SET_PASSWORD" -> "Contraseña temporal asignada por administración"
     "ADMIN_USER_PERMISSIONS" -> "Permisos individuales modificados"
     "ROLE_CREATED" -> "Rol creado"
     "ROLE_UPDATED" -> "Rol modificado"
     "ROLE_DELETED" -> "Rol borrado"
     else -> type.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }
+}
+
+@Composable
+internal fun AdminAuditScreen(state: PrototypeState) {
+    if (!state.can("audit.view")) {
+        ScreenScaffold {
+            BackHeader("Bitácora de seguridad") { state.screen = Screen.ADMIN_HOME }
+            Text("No tienes permiso para consultar la bitácora.")
+        }
+        return
+    }
+    LaunchedEffect(Unit) { state.loadAdmin() }
+    var searchText by remember { mutableStateOf("") }
+    val events = state.adminData?.events.orEmpty()
+    val filteredEvents = events.filter { event ->
+        val searchable = listOfNotNull(
+            eventLabel(event.type),
+            event.type,
+            event.actorEmail,
+            event.targetEmail,
+            event.email,
+            event.detail,
+            event.ip,
+        ).joinToString(" ")
+        searchable.contains(searchText.trim(), ignoreCase = true)
+    }
+
+    ScreenScaffold {
+        BackHeader("Bitácora de seguridad") { state.screen = Screen.ADMIN_HOME }
+        Text(
+            "Registro de accesos y acciones administrativas. En cada evento se identifica quién actuó, sobre qué cuenta y qué cambio se realizó.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = searchText,
+                onValueChange = { searchText = it },
+                modifier = Modifier.weight(1f),
+                label = { Text("Buscar eventos") },
+                singleLine = true,
+            )
+            OutlinedButton(onClick = { state.loadAdmin() }) {
+                Text("Actualizar")
+            }
+        }
+        AdminMessages(state)
+        if (state.adminData == null && state.adminError == null) {
+            Text("Cargando bitácora…", style = MaterialTheme.typography.bodySmall)
+        } else if (filteredEvents.isEmpty()) {
+            Text(
+                if (events.isEmpty()) "No hay eventos de auditoría registrados."
+                else "No hay eventos que coincidan con la búsqueda.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text(
+                "Mostrando ${filteredEvents.size} de ${events.size} eventos recientes.",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            filteredEvents.forEach { AuditEventCard(it) }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun AuditEventCard(event: org.usbrain.project.data.AuditEventDto) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Text(
+                    eventLabel(event.type),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    event.at.take(16).replace('T', ' '),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text("Acción: ${event.type}", style = MaterialTheme.typography.labelSmall)
+            Text(
+                "Realizada por: ${event.actorEmail ?: "No disponible en este registro"}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Cuenta afectada: ${event.targetEmail ?: event.email ?: "—"}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            event.detail?.takeIf { it.isNotBlank() }?.let {
+                Text("Detalle: $it", style = MaterialTheme.typography.bodySmall)
+            }
+            event.ip?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    "IP: $it",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
 
 /* ----------------------------- usuarios ----------------------------- */
@@ -208,7 +341,8 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
     val isPatientRole = state.draftRoleProfileOf(state.draftUserRole) == "PATIENT"
     val initialPasswordAssessment = assessPassword(state.draftUserPassword, state.draftUserEmail)
     val actionPasswordAssessment = assessPassword(state.draftActionPassword, user?.email.orEmpty())
-    val canCreateSuperAdmin = state.sessionUser?.role == "SUPERADMIN"
+    val sensitivePermissions = data?.permissions.orEmpty().filter { it.sensitive }.map { it.id }.toSet()
+    val actorPermissions = state.sessionUser?.permissions.orEmpty().toSet()
     ScreenScaffold {
         BackHeader(if (editing == null) "Nuevo usuario" else "Editar usuario") { state.screen = Screen.ADMIN_USERS }
         if (editing == null) {
@@ -222,15 +356,19 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
         }
         OutlinedTextField(state.draftUserName, { state.draftUserName = it }, Modifier.fillMaxWidth(), label = { Text("Nombre completo") }, singleLine = true)
         DropdownField(
-            label = "Rol",
+            label = "Rol (uno por usuario)",
             selectedLabel = roles.firstOrNull { it.id == state.draftUserRole }?.let { "${it.name} · ${PROFILE_LABELS[it.profile]}" },
             placeholder = "Elige un rol",
-            // Un paciente solo cambia a otros roles de paciente, y viceversa (lo valida también el servidor).
             options = roles
-                .filter { user == null || (it.profile == "PATIENT") == user.isPatient }
-                .filter { it.id != "SUPERADMIN" || canCreateSuperAdmin }
+                .filter { role -> user == null || (role.profile == "PATIENT") == user.isPatient }
+                .filter { role -> role.permissions.filter { it in sensitivePermissions }.all { it in actorPermissions } }
                 .map { it.id to "${it.name} · ${PROFILE_LABELS[it.profile]}" },
             onSelect = { state.draftUserRole = it },
+        )
+        Text(
+            "Cada usuario tiene un solo rol. Al elegir otro, reemplaza el actual; las excepciones individuales que ya tenga se conservan.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (isPatientRole) {
             DropdownField(
@@ -253,16 +391,18 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
             }
         }
         if (editing == null) {
-            OutlinedTextField(
-                state.draftUserPassword, { state.draftUserPassword = it }, Modifier.fillMaxWidth(),
-                label = { Text("Contraseña temporal") }, singleLine = true,
-                visualTransformation = if (initialPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = {
-                    PasswordVisibilityToggle(initialPasswordVisible) {
-                        initialPasswordVisible = !initialPasswordVisible
-                    }
-                },
-            )
+            PasswordClipboardProtection {
+                OutlinedTextField(
+                    state.draftUserPassword, { state.draftUserPassword = it }, Modifier.fillMaxWidth(),
+                    label = { Text("Contraseña temporal") }, singleLine = true,
+                    visualTransformation = if (initialPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        PasswordVisibilityToggle(initialPasswordVisible) {
+                            initialPasswordVisible = !initialPasswordVisible
+                        }
+                    },
+                )
+            }
             PasswordStrengthIndicator(initialPasswordAssessment)
             if (state.draftUserPassword.isNotEmpty() && !initialPasswordAssessment.isValid) {
                 Text(
@@ -299,16 +439,18 @@ internal fun AdminUserEditScreen(state: PrototypeState) {
             OutlinedButton(onClick = { state.userAction("reset_mfa") }, Modifier.fillMaxWidth()) {
                 Text("Restablecer 2FA (perdió el teléfono)")
             }
-            OutlinedTextField(
-                state.draftActionPassword, { state.draftActionPassword = it }, Modifier.fillMaxWidth(),
-                label = { Text("Nueva contraseña temporal") }, singleLine = true,
-                visualTransformation = if (actionPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = {
-                    PasswordVisibilityToggle(actionPasswordVisible) {
-                        actionPasswordVisible = !actionPasswordVisible
-                    }
-                },
-            )
+            PasswordClipboardProtection {
+                OutlinedTextField(
+                    state.draftActionPassword, { state.draftActionPassword = it }, Modifier.fillMaxWidth(),
+                    label = { Text("Nueva contraseña temporal") }, singleLine = true,
+                    visualTransformation = if (actionPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        PasswordVisibilityToggle(actionPasswordVisible) {
+                            actionPasswordVisible = !actionPasswordVisible
+                        }
+                    },
+                )
+            }
             PasswordStrengthIndicator(actionPasswordAssessment)
             if (state.draftActionPassword.isNotEmpty() && !actionPasswordAssessment.isValid) {
                 Text(

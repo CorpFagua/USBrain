@@ -46,6 +46,7 @@ check(superadmin["user"]["role"] == "SUPERADMIN" and "roles.manage" in superadmi
       "el login del super admin trae su rol y sus permisos")
 check(admin["user"]["profile"] == "ADMIN" and "roles.manage" not in admin["user"]["permissions"],
       "el admin tiene interfaz de administración pero no gestiona roles")
+check(isinstance(overview(A)["events"], list), "el administrador puede consultar la bitácora")
 data = overview(S)
 check(len(data["permissions"]) >= 12 and find(data["roles"], id="SUPERADMIN")["is_locked"],
       "overview: catálogo de permisos y rol SUPERADMIN bloqueado")
@@ -77,6 +78,11 @@ status, body = call("POST", "/admin/roles", {**new_role, "permissions": ["permis
 check(status == 400 and body["error"] == "invalid_permission", "permiso inexistente → 400")
 status, body = call("POST", "/admin/roles", new_role, S)
 check(status == 200, "el super admin crea el rol SUPERVISOR_E2E")
+role_event = next((event for event in overview(S)["events"] if event["type"] == "ROLE_CREATED"
+                   and event["detail"].startswith(f"rol={ROLE}")), None)
+check(role_event is not None and role_event["actor_email"] == E2E_SUPERADMIN
+      and role_event["target_email"] is None,
+      "la auditoría de roles identifica al administrador que creó el rol")
 status, body = call("POST", "/admin/roles", new_role, S)
 check(status == 409, "código de rol repetido → 409")
 status, body = call("POST", "/admin/roles/SUPERADMIN", {"permissions": []}, S)
@@ -108,6 +114,38 @@ status, body = call("POST", "/admin/users", {"email": CREATED_PATIENT, "full_nam
                                               "program": "Psicología", "condition": "Ansiedad"}, A)
 check(status == 200, "el admin crea un paciente con su terapeuta, ficha y caso")
 created_patient_id = body["id"]
+status, body = call("POST", "/admin/users", {
+    "email": "e2e.multirol@usbrain.test", "full_name": "Multirol",
+    "role": ["THERAPIST", "ADMIN"], "password": PASSWORD,
+}, A)
+check(status == 400 and body["error"] == "invalid_role", "la API rechaza asignar varios roles al crear")
+status, body = call("POST", f"/admin/users/{created_therapist_id}", {"role": ["THERAPIST", "ADMIN"]}, A)
+check(status == 400 and body["error"] == "invalid_role", "la API rechaza asignar varios roles al editar")
+status, body = call("POST", f"/admin/users/{created_therapist_id}", {"role": ROLE}, A)
+check(status == 403 and body["error"] == "forbidden", "el admin no asigna un rol con permisos sensibles que no posee")
+status, body = call("POST", f"/admin/users/{created_therapist_id}", {"role": ROLE}, S)
+check(status == 200, "el super admin cambia el rol de un usuario existente por un único rol disponible")
+updated_user = find(overview(S)["users"], id=created_therapist_id)
+check(updated_user["role"] == ROLE
+      and set(updated_user["permissions"]) == {"case.view.all", "case.edit.all", "catalog.manage"},
+      "el usuario recibe la totalidad de permisos del nuevo rol")
+status, body = call("POST", f"/admin/users/{created_therapist_id}", {"role": "THERAPIST"}, S)
+check(status == 200 and find(overview(S)["users"], id=created_therapist_id)["role"] == "THERAPIST",
+      "cambiar el rol nuevamente reemplaza el anterior, sin acumular roles")
+user_created_event = next((event for event in overview(A)["events"]
+                           if event["type"] == "ADMIN_USER_CREATED"
+                           and event["target_email"] == CREATED_PATIENT), None)
+check(user_created_event is not None and user_created_event["actor_email"] == E2E_ADMIN
+      and "PATIENT" in user_created_event["detail"],
+      "la auditoría de usuarios identifica quién creó la cuenta, la cuenta afectada y el rol")
+status, body = call("POST", f"/admin/users/{created_patient_id}", {"full_name": "Paciente Nuevo Audit E2E"}, A)
+check(status == 200, "el admin modifica el nombre de la cuenta de prueba")
+user_updated_event = next((event for event in overview(A)["events"]
+                           if event["type"] == "ADMIN_USER_UPDATED"
+                           and event["target_email"] == CREATED_PATIENT), None)
+check(user_updated_event is not None and user_updated_event["actor_email"] == E2E_ADMIN
+      and "Paciente Nuevo -> Paciente Nuevo Audit E2E" in user_updated_event["detail"],
+      "la auditoría muestra al responsable y el valor anterior y nuevo del cambio")
 status, first_login = login(CREATED_THERAPIST, "e2e-first-login-000001", PASSWORD)
 check(status == 200 and first_login["status"] == "password_change_required",
       "usuario nuevo debe cambiar la contraseña temporal antes de 2FA")
@@ -154,6 +192,8 @@ status, enrolled = call("POST", "/auth/mfa/verify", {
 })
 check(status == 200 and enrolled["user"]["mfa_enabled"],
       "el 2FA completa el acceso solo después de cambiar la contraseña")
+status, body = call("POST", "/auth/logout", token=enrolled["access_token"])
+check(status == 200, "cerrar la sesión de enrolamiento antes de probar un nuevo acceso")
 status, body = login(CREATED_THERAPIST, "e2e-first-login-000002", PASSWORD)
 check(status == 401 and body["error"] == "invalid_credentials",
       "la contraseña temporal deja de funcionar tras el cambio")
@@ -188,6 +228,12 @@ status, body = call("POST", "/app/behaviors", behavior, V)
 check(status == 200, "case.edit.all: edita un caso que no tiene asignado")
 status, body = call("POST", f"/admin/roles/{ROLE}", {"permissions": ["case.view.all"]}, S)
 check(status == 200, "el super admin le quita al rol el permiso de editar")
+role_update_event = next((event for event in overview(S)["events"]
+                          if event["type"] == "ROLE_UPDATED"
+                          and event["detail"].startswith(f"rol={ROLE}")), None)
+check(role_update_event is not None and role_update_event["actor_email"] == E2E_SUPERADMIN
+      and "-case.edit.all" in role_update_event["detail"],
+      "la auditoría registra quién modificó el rol y qué permiso retiró")
 status, body = call("POST", "/app/behaviors", behavior, V)
 check(status == 403, "…y el cambio aplica al instante, sin reiniciar nada")
 status, body = call("DELETE", f"/admin/roles/{ROLE}", token=S)

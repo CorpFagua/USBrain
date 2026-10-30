@@ -121,8 +121,10 @@ fi
 run_sql "$SQL_DIR/00_schema.sql" "$SYS_CONNECT" "define app_pwd = $USBRAIN_DB_PASSWORD"
 
 # 01–79: esquema, paquetes y API (00 va como SYS; 80+ son solo de desarrollo, con --seed).
-for file in "$SQL_DIR"/[0-7][0-9]_*.sql; do
-  [[ "$(basename "$file")" == 00_* ]] && continue
+for file in "$SQL_DIR"/[0-9][0-9]_*.sql; do
+  case "$(basename "$file")" in
+    00_*|80_*|90_*) continue ;;
+  esac
   run_sql "$file" "$APP_CONNECT"
 done
 

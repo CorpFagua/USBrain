@@ -32,9 +32,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.Clipboard
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -46,6 +50,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.usbrain.project.security.AppLock
 import org.usbrain.project.security.supportsAppLock
+
+@Composable
+internal fun PasswordClipboardProtection(content: @Composable () -> Unit) {
+    val clipboard = LocalClipboard.current
+    val protectedClipboard = remember(clipboard) {
+        object : Clipboard {
+            override suspend fun getClipEntry(): ClipEntry? = clipboard.getClipEntry()
+
+            override suspend fun setClipEntry(clipEntry: ClipEntry?) {
+                clipboard.setClipEntry(null)
+            }
+
+            @Suppress("DEPRECATION")
+            override val nativeClipboard get() = clipboard.nativeClipboard
+        }
+    }
+    CompositionLocalProvider(LocalClipboard provides protectedClipboard, content = content)
+}
 
 /* ------------------------- contraseña temporal ------------------------- */
 
@@ -62,19 +84,21 @@ internal fun FirstPasswordChangeScreen(state: PrototypeState) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        OutlinedTextField(
-            state.firstPassword,
-            { state.firstPassword = it },
-            Modifier.fillMaxWidth(),
-            label = { Text("Nueva contraseña") },
-            singleLine = true,
-            isError = state.firstPassword.isNotEmpty() && (!assessment.isValid || isSameAsTemporary),
-            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            trailingIcon = {
-                PasswordVisibilityToggle(passwordVisible) { passwordVisible = !passwordVisible }
-            },
-        )
+        PasswordClipboardProtection {
+            OutlinedTextField(
+                state.firstPassword,
+                { state.firstPassword = it },
+                Modifier.fillMaxWidth(),
+                label = { Text("Nueva contraseña") },
+                singleLine = true,
+                isError = state.firstPassword.isNotEmpty() && (!assessment.isValid || isSameAsTemporary),
+                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    PasswordVisibilityToggle(passwordVisible) { passwordVisible = !passwordVisible }
+                },
+            )
+        }
         Text(
             "Caracteres: ${passwordCharacterCount(state.firstPassword)}/10",
             style = MaterialTheme.typography.bodySmall,
@@ -89,20 +113,22 @@ internal fun FirstPasswordChangeScreen(state: PrototypeState) {
                 color = MaterialTheme.colorScheme.error,
             )
         }
-        OutlinedTextField(
-            state.firstPasswordConfirmation,
-            { state.firstPasswordConfirmation = it },
-            Modifier.fillMaxWidth(),
-            label = { Text("Confirma la nueva contraseña") },
-            singleLine = true,
-            isError = state.firstPasswordConfirmation.isNotEmpty() &&
-                state.firstPassword != state.firstPasswordConfirmation,
-            visualTransformation = if (confirmationVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            trailingIcon = {
-                PasswordVisibilityToggle(confirmationVisible) { confirmationVisible = !confirmationVisible }
-            },
-        )
+        PasswordClipboardProtection {
+            OutlinedTextField(
+                state.firstPasswordConfirmation,
+                { state.firstPasswordConfirmation = it },
+                Modifier.fillMaxWidth(),
+                label = { Text("Confirma la nueva contraseña") },
+                singleLine = true,
+                isError = state.firstPasswordConfirmation.isNotEmpty() &&
+                    state.firstPassword != state.firstPasswordConfirmation,
+                visualTransformation = if (confirmationVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    PasswordVisibilityToggle(confirmationVisible) { confirmationVisible = !confirmationVisible }
+                },
+            )
+        }
         Text(
             "Requisitos: exactamente 10 caracteres, al menos 3 tipos de caracteres (mayúsculas, minúsculas, números y símbolos) y no incluir el nombre de usuario del correo.",
             style = MaterialTheme.typography.bodySmall,
@@ -177,17 +203,19 @@ internal fun ForgotPasswordScreen(state: PrototypeState) {
             state.forgotInfo?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            OutlinedTextField(
-                state.forgotNewPassword, { state.forgotNewPassword = it }, Modifier.fillMaxWidth(),
-                label = { Text("Nueva contraseña") }, singleLine = true,
-                isError = state.forgotNewPassword.isNotEmpty() &&
-                    !assessPassword(state.forgotNewPassword, state.forgotEmail, exactLength = true).isValid,
-                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                trailingIcon = {
-                    PasswordVisibilityToggle(passwordVisible) { passwordVisible = !passwordVisible }
-                },
-            )
+            PasswordClipboardProtection {
+                OutlinedTextField(
+                    state.forgotNewPassword, { state.forgotNewPassword = it }, Modifier.fillMaxWidth(),
+                    label = { Text("Nueva contraseña") }, singleLine = true,
+                    isError = state.forgotNewPassword.isNotEmpty() &&
+                        !assessPassword(state.forgotNewPassword, state.forgotEmail, exactLength = true).isValid,
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        PasswordVisibilityToggle(passwordVisible) { passwordVisible = !passwordVisible }
+                    },
+                )
+            }
             val passwordAssessment = assessPassword(
                 state.forgotNewPassword,
                 state.forgotEmail,
@@ -206,17 +234,19 @@ internal fun ForgotPasswordScreen(state: PrototypeState) {
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            OutlinedTextField(
-                state.forgotConfirmPassword, { state.forgotConfirmPassword = it }, Modifier.fillMaxWidth(),
-                label = { Text("Repite la nueva contraseña") }, singleLine = true,
-                isError = state.forgotConfirmPassword.isNotEmpty() &&
-                    state.forgotNewPassword != state.forgotConfirmPassword,
-                visualTransformation = if (confirmationVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                trailingIcon = {
-                    PasswordVisibilityToggle(confirmationVisible) { confirmationVisible = !confirmationVisible }
-                },
-            )
+            PasswordClipboardProtection {
+                OutlinedTextField(
+                    state.forgotConfirmPassword, { state.forgotConfirmPassword = it }, Modifier.fillMaxWidth(),
+                    label = { Text("Repite la nueva contraseña") }, singleLine = true,
+                    isError = state.forgotConfirmPassword.isNotEmpty() &&
+                        state.forgotNewPassword != state.forgotConfirmPassword,
+                    visualTransformation = if (confirmationVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        PasswordVisibilityToggle(confirmationVisible) { confirmationVisible = !confirmationVisible }
+                    },
+                )
+            }
             Text(
                 "Usa exactamente 10 caracteres, combina al menos 3 tipos (mayúsculas, minúsculas, números y símbolos) y no incluyas el usuario del correo.",
                 style = MaterialTheme.typography.bodySmall,
@@ -482,21 +512,25 @@ internal fun ChangePasswordScreen(state: PrototypeState) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        OutlinedTextField(
-            state.changeCurrentPassword, { state.changeCurrentPassword = it }, Modifier.fillMaxWidth(),
-            label = { Text("Contraseña actual") }, singleLine = true,
-            visualTransformation = if (currentVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            trailingIcon = { PasswordVisibilityToggle(currentVisible) { currentVisible = !currentVisible } },
-        )
-        OutlinedTextField(
-            state.changeNewPassword, { state.changeNewPassword = it }, Modifier.fillMaxWidth(),
-            label = { Text("Nueva contraseña") }, singleLine = true,
-            isError = state.changeNewPassword.isNotEmpty() && (!assessment.isValid || sameAsCurrent),
-            visualTransformation = if (newVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            trailingIcon = { PasswordVisibilityToggle(newVisible) { newVisible = !newVisible } },
-        )
+        PasswordClipboardProtection {
+            OutlinedTextField(
+                state.changeCurrentPassword, { state.changeCurrentPassword = it }, Modifier.fillMaxWidth(),
+                label = { Text("Contraseña actual") }, singleLine = true,
+                visualTransformation = if (currentVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = { PasswordVisibilityToggle(currentVisible) { currentVisible = !currentVisible } },
+            )
+        }
+        PasswordClipboardProtection {
+            OutlinedTextField(
+                state.changeNewPassword, { state.changeNewPassword = it }, Modifier.fillMaxWidth(),
+                label = { Text("Nueva contraseña") }, singleLine = true,
+                isError = state.changeNewPassword.isNotEmpty() && (!assessment.isValid || sameAsCurrent),
+                visualTransformation = if (newVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = { PasswordVisibilityToggle(newVisible) { newVisible = !newVisible } },
+            )
+        }
         Text(
             "Caracteres: ${passwordCharacterCount(state.changeNewPassword)}/10",
             style = MaterialTheme.typography.bodySmall,
@@ -510,14 +544,16 @@ internal fun ChangePasswordScreen(state: PrototypeState) {
                 color = MaterialTheme.colorScheme.error,
             )
         }
-        OutlinedTextField(
-            state.changeConfirmPassword, { state.changeConfirmPassword = it }, Modifier.fillMaxWidth(),
-            label = { Text("Confirma la nueva contraseña") }, singleLine = true,
-            isError = mismatch,
-            visualTransformation = if (confirmVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            trailingIcon = { PasswordVisibilityToggle(confirmVisible) { confirmVisible = !confirmVisible } },
-        )
+        PasswordClipboardProtection {
+            OutlinedTextField(
+                state.changeConfirmPassword, { state.changeConfirmPassword = it }, Modifier.fillMaxWidth(),
+                label = { Text("Confirma la nueva contraseña") }, singleLine = true,
+                isError = mismatch,
+                visualTransformation = if (confirmVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = { PasswordVisibilityToggle(confirmVisible) { confirmVisible = !confirmVisible } },
+            )
+        }
         if (mismatch) {
             Text("Las contraseñas no coinciden.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }

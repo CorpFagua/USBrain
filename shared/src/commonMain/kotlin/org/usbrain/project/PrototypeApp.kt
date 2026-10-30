@@ -61,6 +61,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -104,7 +109,24 @@ import org.usbrain.project.data.Enrollment
 
 @Composable
 fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit) {
+    LaunchedEffect(state) {
+        while (true) {
+            delay(1_000)
+            state.idleTick()
+        }
+    }
+    if (state.idleWarningVisible) IdleWarningDialog(state)
     Scaffold(
+        modifier = Modifier
+            .pointerInput(state) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(PointerEventPass.Initial)
+                        state.registerActivity()
+                    }
+                }
+            }
+            .onPreviewKeyEvent { state.registerActivity(); false },
         containerColor = MaterialTheme.colorScheme.background,
         topBar = { StatusBanners(state) },
         bottomBar = { if (showsBottomBar(state)) BottomBar(state) },
@@ -171,11 +193,28 @@ fun PrototypeApp(state: PrototypeState, dark: Boolean, onToggleTheme: () -> Unit
                 Screen.ADMIN_USER_EDIT -> AdminUserEditScreen(state)
                 Screen.ADMIN_ROLES -> AdminRolesScreen(state)
                 Screen.ADMIN_ROLE_EDIT -> AdminRoleEditScreen(state)
+                Screen.ADMIN_AUDIT -> AdminAuditScreen(state)
                 Screen.ADMIN_PROFILE -> AdminProfileScreen(state)
                 Screen.CHANGE_PASSWORD -> ChangePasswordScreen(state)
             }
         }
     }
+}
+
+@Composable
+private fun IdleWarningDialog(state: PrototypeState) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = {},
+        title = { Text("Desconexión por inactividad", fontWeight = FontWeight.Bold) },
+        text = {
+            Text(
+                "Su sesión expirará. Se cerrará automáticamente en ${state.idleCountdown} segundos " +
+                    "si no hay actividad.",
+            )
+        },
+        confirmButton = { Button(onClick = { state.continueSession() }) { Text("Continuar") } },
+        dismissButton = { OutlinedButton(onClick = { state.logoutFromIdleWarning() }) { Text("Cerrar sesión") } },
+    )
 }
 
 private fun showsBottomBar(state: PrototypeState): Boolean {
@@ -272,6 +311,7 @@ private fun parentTab(screen: Screen): Screen = when (screen) {
     Screen.PATIENT_TASK, Screen.PATIENT_DONE -> Screen.PATIENT_HOME
     Screen.ADMIN_USER_EDIT -> Screen.ADMIN_USERS
     Screen.ADMIN_ROLE_EDIT -> Screen.ADMIN_ROLES
+    Screen.ADMIN_AUDIT -> Screen.ADMIN_HOME
     // Conducta y su historial cuelgan de la pestaña "Historial", no de "Inicio".
     Screen.PATIENT_BEHAVIOR, Screen.PATIENT_TASK_HISTORY -> Screen.PATIENT_BEHAVIORS
     Screen.THERAPIST_PATIENT, Screen.THERAPIST_PATIENT_INFO, Screen.THERAPIST_BEHAVIOR, Screen.THERAPIST_TASK_DETAIL,
@@ -982,17 +1022,19 @@ private fun LoginScreen(state: PrototypeState) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
         )
         Spacer(Modifier.height(10.dp))
-        OutlinedTextField(
-            state.loginPassword, { state.loginPassword = it }, Modifier.fillMaxWidth(),
-            label = { Text("Contraseña") }, singleLine = true,
-            visualTransformation = if (passwordVisible) {
-                androidx.compose.ui.text.input.VisualTransformation.None
-            } else {
-                PasswordVisualTransformation()
-            },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            trailingIcon = { PasswordVisibilityToggle(passwordVisible) { passwordVisible = !passwordVisible } },
-        )
+        PasswordClipboardProtection {
+            OutlinedTextField(
+                state.loginPassword, { state.loginPassword = it }, Modifier.fillMaxWidth(),
+                label = { Text("Contraseña") }, singleLine = true,
+                visualTransformation = if (passwordVisible) {
+                    androidx.compose.ui.text.input.VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = { PasswordVisibilityToggle(passwordVisible) { passwordVisible = !passwordVisible } },
+            )
+        }
         state.authInfo?.let {
             Spacer(Modifier.height(10.dp))
             Text(it, style = MaterialTheme.typography.bodySmall, color = LocalUsBrainSemantic.current.success, modifier = Modifier.fillMaxWidth())

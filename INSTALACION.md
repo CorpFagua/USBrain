@@ -59,7 +59,8 @@ Debe tener al menos 8 caracteres, con mayúscula, minúscula y número. Lo demá
 el instalador genera las otras contraseñas.
 
 > Si ya usas los puertos 1521 u 8080 para otra cosa, cámbialos en `DB_PORT` y `ORDS_PORT`
-> (y ajusta `API_BASE` al nuevo puerto de ORDS).
+> (y ajusta `API_BASE` al nuevo puerto de ORDS). APEX usa `APEX_PORT` (por defecto `8182`);
+> ambos puertos apuntan al mismo servicio ORDS.
 
 ### 3A.2 (Opcional) APEX
 
@@ -68,7 +69,11 @@ La app **no necesita APEX**; sirve para ver y editar la base desde el navegador.
 1. Descarga `apex-latest.zip` de https://download.oracle.com/otn_software/apex/apex-latest.zip
 2. Descomprímelo en `backend/apex/`, de modo que quede `backend/apex/apexins.sql` y `backend/apex/images/`.
 
-ORDS lo detecta y lo instala solo en el siguiente paso (tarda más la primera vez).
+Para una base nueva, antes del siguiente paso cambia temporalmente en
+`backend/docker-compose.yml` el volumen de imágenes
+`./apex/images:/opt/oracle/apex/images:ro` por `./apex:/opt/oracle/apex`. Levanta ORDS una vez
+para que instale APEX. Cuando termine, vuelve a dejar el volumen de imágenes como estaba y
+recrea ORDS; así las siguientes arrancadas no intentarán reinstalar APEX.
 
 ### 3A.3 Levantar la base y ORDS
 
@@ -217,7 +222,7 @@ El primer ingreso de cada cuenta muestra un **QR** para Google o Microsoft Authe
 códigos de recuperación. En Android e iOS, después se crea un **PIN** de 6 dígitos (y, si quieres,
 huella o rostro).
 
-**APEX** (si lo instalaste): http://localhost:8080/ords/apex → workspace `USBRAIN`, usuario `dev`,
+**APEX** (si lo instalaste): http://localhost:8182/ords/apex → workspace `USBRAIN`, usuario `dev`,
 contraseña `APEX_DEV_PASSWORD` de `backend/.env` (APEX pide cambiarla la primera vez).
 
 ---

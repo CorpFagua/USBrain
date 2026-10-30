@@ -12,6 +12,7 @@ Database Free 26ai + APEX que corre en Docker (`oracle-db` y `ords`).
   el código revisa permisos, nunca nombres de rol.
 - **Olvido de contraseña** verificado con la app autenticadora o un código de recuperación.
 - Base URL local: `http://localhost:8080/ords/usbrain/v1`
+- APEX local: `http://localhost:8182/ords/apex` (puerto alternativo del mismo ORDS)
 
 ## Instalación
 
@@ -60,10 +61,15 @@ Ninguno tiene autenticador: el primer login muestra el QR para enrolarlo. Volver
 
 ## Ver y editar la base de datos
 
-**En el navegador (APEX):** `http://localhost:8080/ords/apex` → Workspace `USBRAIN`, usuario `dev`,
+**En el navegador (APEX):** `http://localhost:8182/ords/apex` → Workspace `USBRAIN`, usuario `dev`,
 contraseña `APEX_DEV_PASSWORD` de `backend/.env`. En *SQL Workshop*: **Object Browser** (ver tablas
 y datos), **SQL Commands** (ejecutar SQL), **SQL Scripts** (correr archivos). En *App Builder* se
 pueden crear pantallas de administración sobre estas mismas tablas.
+
+`APEX_PORT` (por defecto `8182`) y `ORDS_PORT` (por defecto `8080`) publican el mismo servicio
+ORDS en dos puertos locales. APEX también sigue disponible bajo `ORDS_PORT`; el puerto alternativo
+no es una instancia independiente ni una frontera de seguridad. Si cambias `APEX_PORT` en
+`backend/.env`, usa ese valor en la URL.
 
 **Desde VS Code:** extensión *Oracle SQL Developer* → conexión con usuario `USBRAIN`, contraseña
 `USBRAIN_DB_PASSWORD` de `backend/.env`, host `localhost`, puerto `1521`, servicio `FREEPDB1`.
@@ -132,7 +138,7 @@ Respuesta con tokens:
 
 ```json
 {
-  "access_token": "usb_at_…", "token_type": "Bearer", "expires_in": 600,
+  "access_token": "usb_at_…", "token_type": "Bearer", "expires_in": 300,
   "refresh_token": "usb_rt_…", "refresh_expires_at": "2026-11-16T15:00:00Z",
   "session_id": 42, "session_expires_at": "2027-01-15T15:00:00Z",
   "user": { "id": 1, "email": "…", "full_name": "…", "role": "PATIENT", "mfa_enabled": true }
@@ -236,18 +242,27 @@ Reglas (en `usb_admin`, validadas antes de escribir):
 4. Siempre queda al menos un usuario activo con `roles.manage`.
 5. El rol `SUPERADMIN` no se edita ni se borra; los roles base no se borran; un rol con usuarios no se borra.
 6. Cambiar el rol de un usuario cierra sus sesiones; cambiar los permisos de un rol aplica en la siguiente petición.
+7. Cada usuario tiene un único rol. Cambiarlo reemplaza el anterior; las excepciones individuales de permisos se conservan.
 
 ### API de administración (`/ords/usbrain/v1/admin/…`, Bearer)
 
 | Método | Ruta | Permiso | Cuerpo |
 |---|---|---|---|
 | GET | `overview` | `users.view` o `roles.manage` | — (usuarios, roles, permisos, terapeutas y, con `audit.view`, bitácora) |
-| POST | `users` | `users.manage` | `email`, `full_name`, `role`, `password` (+ `therapist_id`, `birth_date`, `program`, `condition` si es paciente) |
-| POST | `users/{id}` | `users.manage` | `full_name`, `role`, `status`, `therapist_id` |
+| POST | `users` | `users.manage` | `email`, `full_name`, `role` (un único id de rol), `password` (+ `therapist_id`, `birth_date`, `program`, `condition` si es paciente) |
+| POST | `users/{id}` | `users.manage` | `full_name`, `role` (reemplaza el rol actual por uno de la lista), `status`, `therapist_id` |
 | POST | `users/{id}/actions` | `users.manage` | `action`: `unlock` \| `reset_mfa` \| `set_password` (+ `password`) |
+| POST | `users/{id}/permissions` | `users.permissions` | `overrides[]`: excepciones individuales GRANT/DENY; reemplaza la lista de excepciones |
 | POST | `roles` | `roles.manage` | `id`, `name`, `description`, `profile`, `permissions[]` |
 | POST | `roles/{id}` | `roles.manage` | los mismos campos, menos `id` |
 | DELETE | `roles/{id}` | `roles.manage` | — |
+
+En la app, quienes tienen `audit.view` (Administrador y Superadministrador en los roles base)
+encuentran el resumen en **Panel → Actividad de seguridad reciente → Ver bitácora completa**.
+La vista presenta los últimos 60 eventos, con búsqueda, fecha, acción, administrador que la hizo,
+cuenta afectada, detalle del cambio e IP cuando está disponible. Los registros persistidos están
+en `USB_AUTH_EVENTS`; los campos `ACTOR_USER_ID` y `TARGET_USER_ID` separan al responsable de la
+cuenta modificada. Los eventos antiguos, anteriores a esta separación, pueden no mostrar responsable.
 
 ## Olvido de contraseña
 
@@ -285,10 +300,10 @@ de login. Sin teléfono ni códigos de recuperación, el administrador usa `rese
 
 | Clave | Valor | Significado |
 |---|---|---|
-| `ACCESS_TTL_SECONDS` | 600 | Vida del access token (la app lo renueva sola) |
-| `REFRESH_IDLE_MINUTES` | 30 | Minutos sin actividad antes de revocar la sesión y pedir login + 2FA |
+| `ACCESS_TTL_SECONDS` | 300 | Vida del access token (la app lo renueva sola) |
+| `REFRESH_IDLE_MINUTES` | 60 | Límite del servidor: minutos sin actividad antes de revocar la sesión y pedir login + 2FA. Independientemente, la interfaz avisa tras 2 minutos y cierra la sesión local 60 segundos después si no se responde |
 | `SESSION_ABSOLUTE_DAYS` | 90 | Vida máxima de una sesión aunque se use a diario |
-| `MAX_SESSIONS_PER_USER` | 1 | Sesiones activas por usuario. Con 1, entrar en otro dispositivo, navegador o pestaña cierra la sesión anterior, y esa sesión ve "se inició sesión con tu cuenta en otro dispositivo" |
+| `MAX_SESSIONS_PER_USER` | 1 | Máximo de sesiones activas. Al alcanzar el límite, se rechaza el nuevo inicio de sesión y las sesiones existentes permanecen activas |
 | `MAX_FAILED_LOGINS` / `LOCKOUT_MINUTES` | 5 / 15 | Bloqueo |
 | `CHALLENGE_TTL_SECONDS` / `CHALLENGE_MAX_ATTEMPTS` | 300 / 5 | Tiempo e intentos para el código 2FA |
 | `PBKDF2_ITERATIONS` | 310000 | Costo del hash |
@@ -315,7 +330,7 @@ Cuándo aplica cada cambio:
 - `ACCESS_TTL_SECONDS`: para los tokens que se emitan desde ese momento (los ya entregados
   conservan su vencimiento).
 - `REFRESH_IDLE_MINUTES`: se comprueba contra `last_seen_at` en cada petición autenticada y refresh;
-  por eso también cierra sesiones existentes que lleven más de 30 minutos inactivas.
+  por eso también cierra sesiones existentes que lleven más de 60 minutos inactivas.
 - `PBKDF2_ITERATIONS`: cada contraseña se re-hashea sola en el siguiente login correcto.
 
 ### Reglas de entrada y cambio de contraseña

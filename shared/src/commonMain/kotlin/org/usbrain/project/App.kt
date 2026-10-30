@@ -24,7 +24,10 @@ fun App() {
         LaunchedEffect(Unit) { state.start() }
         // Como en un banco: si la app estuvo un rato en segundo plano, al volver pide el PIN.
         LifecycleEventEffect(Lifecycle.Event.ON_STOP) { state.onBackground() }
-        LifecycleEventEffect(Lifecycle.Event.ON_START) { state.onForeground() }
+        LifecycleEventEffect(Lifecycle.Event.ON_START) {
+            state.onForeground()
+            state.idleTick()
+        }
         PrototypeApp(
             state = state,
             dark = dark,

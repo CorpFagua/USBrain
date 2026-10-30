@@ -2,7 +2,7 @@
 -- USBrain · 80_apex_workspace.sql  (SYS, desarrollo)
 -- Crea el workspace APEX "USBRAIN" sobre el esquema USBRAIN y un usuario
 -- desarrollador para ver y editar la base desde el navegador:
---   http://localhost:8080/ords/apex   → Workspace USBRAIN
+--   http://localhost:8182/ords/apex   → Workspace USBRAIN (puerto APEX por defecto)
 -- Variables: &apex_user, &apex_pwd, &apex_email. Idempotente.
 -- =============================================================================
 whenever sqlerror exit failure rollback

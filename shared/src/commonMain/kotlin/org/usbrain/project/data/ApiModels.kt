@@ -284,6 +284,8 @@ data class AuditEventDto(
     val at: String,
     val type: String,
     val email: String? = null,
+    @SerialName("actor_email") val actorEmail: String? = null,
+    @SerialName("target_email") val targetEmail: String? = null,
     val detail: String? = null,
     val ip: String? = null,
 )

@@ -118,9 +118,10 @@ create or replace package body usb_auth as
   procedure audit_event(p_type varchar2, p_user_id number, p_session_id number default null,
                         p_device_id varchar2 default null, p_detail varchar2 default null) is
   begin
-    insert into usb_auth_events (user_id, session_id, event_type, ip_address, user_agent, device_id, detail)
-    values (p_user_id, p_session_id, p_type, g_ip, g_user_agent, substr(p_device_id, 1, 128),
-            substr(p_detail, 1, 1000));
+    insert into usb_auth_events (user_id, actor_user_id, target_user_id, session_id, event_type,
+                                 ip_address, user_agent, device_id, detail)
+    values (p_user_id, g_user_id, p_user_id, p_session_id, p_type, g_ip, g_user_agent,
+            substr(p_device_id, 1, 128), substr(p_detail, 1, 1000));
   end audit_event;
 
   function load_user(p_user_id number) return usb_users%rowtype is
@@ -264,6 +265,38 @@ create or replace package body usb_auth as
     end loop;
   end revoke_user_sessions;
 
+  procedure ensure_session_capacity(p_user_id number, p_device_id varchar2) is
+    l_active_session_id number;
+    l_active_count      number := 0;
+    l_max_sessions      number := cfg_num('MAX_SESSIONS_PER_USER');
+    l_idle_cutoff       timestamp with time zone :=
+      systimestamp - numtodsinterval(cfg_num('REFRESH_IDLE_MINUTES'), 'MINUTE');
+  begin
+    for s in (select session_id, last_seen_at, absolute_expires_at
+                from usb_sessions
+               where user_id = p_user_id and revoked_at is null
+                 and (absolute_expires_at <= systimestamp or last_seen_at <= l_idle_cutoff)) loop
+      revoke_session_internal(
+        s.session_id,
+        case when s.last_seen_at <= l_idle_cutoff then 'IDLE_TIMEOUT' else 'SESSION_EXPIRED' end
+      );
+    end loop;
+
+    select count(*), min(session_id)
+      into l_active_count, l_active_session_id
+      from usb_sessions
+     where user_id = p_user_id and revoked_at is null
+       and absolute_expires_at > systimestamp
+       and last_seen_at > l_idle_cutoff;
+
+    if l_active_count >= l_max_sessions then
+      audit_event('LOGIN_BLOCKED_ACTIVE_SESSION', p_user_id, l_active_session_id, p_device_id,
+                  'active_sessions=' || l_active_count);
+      fail(e_conflict, 'active_session',
+           'Ya alcanzaste el máximo de sesiones permitidas. Cierra la sesión activa en el otro navegador o dispositivo e intenta de nuevo.');
+    end if;
+  end ensure_session_capacity;
+
   -- Devuelve el paso TOTP que coincide (dentro de la ventana) o null.
   -- Un paso igual o anterior al último usado se rechaza: el mismo código no sirve dos veces.
   function match_totp(p_secret raw, p_code varchar2, p_last_step number) return number is
@@ -365,33 +398,25 @@ create or replace package body usb_auth as
     l_session_id   number;
     l_absolute     timestamp with time zone :=
       systimestamp + numtodsinterval(cfg_num('SESSION_ABSOLUTE_DAYS'), 'DAY');
-    l_max_sessions number := cfg_num('MAX_SESSIONS_PER_USER');
     l_result       json_object_t;
+    l_locked_user  number;
   begin
+    -- Serializa logins verificados del mismo usuario, incluso si ambos empezaron antes
+    -- de que existiera una sesión activa.
+    select user_id into l_locked_user
+      from usb_users
+     where user_id = p_user.user_id
+       for update;
+    ensure_session_capacity(p_user.user_id, p_challenge.device_id);
+
     update usb_login_challenges set consumed_at = systimestamp
      where challenge_hash = p_challenge.challenge_hash;
-
-    -- Una sesión por dispositivo: un login nuevo en el mismo equipo reemplaza la anterior.
-    for s in (select session_id from usb_sessions
-               where user_id = p_user.user_id and device_id = p_challenge.device_id
-                 and revoked_at is null) loop
-      revoke_session_internal(s.session_id, 'REPLACED');
-    end loop;
 
     insert into usb_sessions (user_id, device_id, device_name, user_agent, ip_created, ip_last,
                               mfa_method, absolute_expires_at)
     values (p_user.user_id, p_challenge.device_id, p_challenge.device_name, g_user_agent, g_ip, g_ip,
             p_method, l_absolute)
     returning session_id into l_session_id;
-
-    -- Límite de dispositivos simultáneos: se cierran los menos usados.
-    for s in (select session_id from usb_sessions
-               where user_id = p_user.user_id and revoked_at is null
-                 and absolute_expires_at > systimestamp
-               order by last_seen_at desc
-              offset l_max_sessions rows) loop
-      revoke_session_internal(s.session_id, 'SESSION_LIMIT');
-    end loop;
 
     audit_event('LOGIN_SUCCESS', p_user.user_id, l_session_id, p_challenge.device_id, p_method);
     l_result := issue_tokens(l_session_id, l_absolute);
@@ -586,6 +611,8 @@ create or replace package body usb_auth as
       fail(e_unauthorized, 'invalid_credentials', 'Correo o contraseña incorrectos.');
     end if;
     ensure_active(l_user);
+
+    ensure_session_capacity(l_user.user_id, p_device_id);
 
     -- Si se subieron las iteraciones en la configuración, se re-hashea al vuelo.
     if l_user.password_iterations < cfg_num('PBKDF2_ITERATIONS') then

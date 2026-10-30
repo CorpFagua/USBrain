@@ -61,6 +61,10 @@ enum class TaskStatus { PENDIENTE, COMPLETADA }
 data class BehavioralFunctionOption(val id: String, val label: String)
 const val NO_APLICA_FUNCTION_ID = "fn-no-aplica"
 
+/** Segundos sin interacción antes del aviso de desconexión, y segundos para responder. */
+const val IDLE_WARNING_SECONDS = 120
+const val IDLE_COUNTDOWN_SECONDS = 60
+
 enum class TaskType(val label: String) {
     REGISTRO_AUTONOMO("Registro autónomo"),
     EJERCICIO_PRACTICA("Ejercicio / práctica"),
@@ -143,7 +147,7 @@ enum class Screen {
     // pantalla se mantenga enfocada solo en las conductas del caso.
     THERAPIST_HOME, THERAPIST_PATIENT, THERAPIST_PATIENT_INFO, THERAPIST_BEHAVIOR, THERAPIST_TASK_DETAIL,
     THERAPIST_NEW_BEHAVIOR, THERAPIST_BASELINE_SETUP, THERAPIST_NEW_TASK, THERAPIST_NEW_WIDGET, THERAPIST_ASSIGNED, THERAPIST_PROFILE,
-    ADMIN_HOME, ADMIN_ANALYTICS, ADMIN_USERS, ADMIN_USER_EDIT, ADMIN_ROLES, ADMIN_ROLE_EDIT, ADMIN_PROFILE,
+    ADMIN_HOME, ADMIN_ANALYTICS, ADMIN_USERS, ADMIN_USER_EDIT, ADMIN_ROLES, ADMIN_ROLE_EDIT, ADMIN_AUDIT, ADMIN_PROFILE,
     // Desde el perfil de cualquier rol.
     CHANGE_PASSWORD,
 }
@@ -852,6 +856,10 @@ class PrototypeState(
     }
 
     private suspend fun enterApp(user: SessionUser) {
+        idleLastActivityAt = nowMillis()
+        idleWarningStartedAt = null
+        idleSeconds = 0
+        idleWarningVisible = false
         sessionUser = user
         reload()
         permissions = user.permissions.toSet()
@@ -875,7 +883,81 @@ class PrototypeState(
         }
     }
 
+    // --- Inactividad: aviso a los 2 minutos sin interacción, con cuenta regresiva para cerrar ---
+    var idleSeconds by mutableStateOf(0)
+        private set
+    var idleWarningVisible by mutableStateOf(false)
+        private set
+    var idleCountdown by mutableStateOf(IDLE_COUNTDOWN_SECONDS)
+        private set
+    private var idleLastActivityAt = 0L
+    private var idleWarningStartedAt: Long? = null
+
+    /** Cualquier interacción del usuario reinicia el conteo (salvo que el aviso ya esté abierto). */
+    fun registerActivity() {
+        if (!idleWarningVisible) {
+            idleLastActivityAt = nowMillis()
+            idleSeconds = 0
+        }
+    }
+
+    /** Recalcula contra el reloj real para no perder tiempo cuando el navegador limita sus ticks. */
+    fun idleTick() {
+        val now = nowMillis()
+        if (sessionUser == null || screen == Screen.LOGIN || screen == Screen.LOCK) {
+            idleSeconds = 0
+            idleWarningVisible = false
+            idleLastActivityAt = now
+            idleWarningStartedAt = null
+            return
+        }
+        if (idleWarningVisible) {
+            val warningStartedAt = idleWarningStartedAt ?: now.also { idleWarningStartedAt = it }
+            val warningElapsed = ((now - warningStartedAt).coerceAtLeast(0L) / 1000).toInt()
+            idleCountdown = (IDLE_COUNTDOWN_SECONDS - warningElapsed).coerceAtLeast(0)
+            if (idleCountdown <= 0) {
+                idleWarningVisible = false
+                idleWarningStartedAt = null
+                logout("Tu sesión se cerró por inactividad.")
+            }
+            return
+        }
+        idleSeconds = ((now - idleLastActivityAt).coerceAtLeast(0L) / 1000).toInt()
+        if (idleSeconds >= IDLE_WARNING_SECONDS) {
+            idleCountdown = IDLE_COUNTDOWN_SECONDS
+            idleWarningStartedAt = now
+            idleWarningVisible = true
+        }
+    }
+
+    /** "Continuar": una llamada autenticada renueva la actividad en el servidor y el token. */
+    fun continueSession() {
+        idleWarningVisible = false
+        idleWarningStartedAt = null
+        idleLastActivityAt = nowMillis()
+        idleSeconds = 0
+        scope.launch {
+            try {
+                api.bootstrap()
+            } catch (e: SessionExpiredException) {
+                endSession(e.message)
+            } catch (_: Exception) {
+                // Un fallo de red momentáneo no cierra la sesión; la próxima acción lo reintenta.
+            }
+        }
+    }
+
+    fun logoutFromIdleWarning() {
+        idleWarningVisible = false
+        idleWarningStartedAt = null
+        logout()
+    }
+
     private fun endSession(message: String?) {
+        idleWarningVisible = false
+        idleWarningStartedAt = null
+        idleSeconds = 0
+        idleLastActivityAt = nowMillis()
         api.clearSession()
         role = null
         sessionUser = null
@@ -893,6 +975,10 @@ class PrototypeState(
 
     /** Después de contraseña + 2FA (o de restaurar la sesión): crear el PIN si falta, y entrar. */
     private suspend fun proceedAfterAuth(user: SessionUser) {
+        idleLastActivityAt = nowMillis()
+        idleWarningStartedAt = null
+        idleSeconds = 0
+        idleWarningVisible = false
         sessionUser = user
         permissions = user.permissions.toSet()
         if (supportsAppLock && !AppLock.hasPinFor(user.id)) {

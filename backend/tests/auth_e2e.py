@@ -53,24 +53,41 @@ check(status == 200 and body["email"] == PATIENT and body["session"]["mfa_method
 status, body = call("GET", "/auth/me", token="usb_at_" + "A" * 43)
 check(status == 401 and body["error"] == "token_expired", "token inventado → 401 token_expired")
 
-print("\n3. Segundo dispositivo: anti-replay y una sola sesión por usuario")
+print("\n3. Segundo dispositivo: una sesión única por usuario")
 status, body = login(PATIENT, TABLET)
-check(status == 200 and body["status"] == "mfa_required", "usuario enrolado → pide código 2FA")
-status, body = call("POST", "/auth/mfa/verify", {"challenge_id": body["challenge_id"], "code": totp(secret)})
-check(status == 401 and body["error"] == "invalid_code", "repetir el código ya usado → rechazado (anti-replay)")
-print("       (esperando la siguiente ventana TOTP…)")
-wait_next_step()
-status, body = login(PATIENT, TABLET)
-status, body = call("POST", "/auth/mfa/verify", {"challenge_id": body["challenge_id"], "code": totp(secret)})
-check(status == 200, "código de la nueva ventana → sesión en la tablet")
-tablet = body
+check(status == 409 and body["error"] == "active_session", "segundo navegador → login rechazado por sesión activa")
 status, body = call("GET", "/auth/me", token=phone["access_token"])
-check(status == 401, "…y la sesión del teléfono se cierra (una sola sesión por usuario)")
-status, body = call("POST", "/auth/refresh", {"refresh_token": phone["refresh_token"], "device_id": PHONE})
-check(status == 401 and body["error"] == "session_replaced",
-      "…y el teléfono recibe el motivo: se inició sesión en otro dispositivo")
+check(status == 200 and body["email"] == PATIENT, "el primer navegador conserva su sesión")
+status, body = call("GET", "/auth/sessions", token=phone["access_token"])
+check(status == 200 and len(body["items"]) == 1 and body["items"][0]["current"],
+      "solo sigue activa la sesión del primer navegador")
+status, body = call("POST", "/auth/logout", token=phone["access_token"])
+check(status == 200, "cerrar la sesión actual libera el acceso")
+
+status, tablet_challenge = login(PATIENT, TABLET)
+check(status == 200 and tablet_challenge["status"] == "mfa_required", "segundo navegador obtiene su desafío 2FA")
+status, phone_challenge = login(PATIENT, PHONE)
+check(status == 200 and phone_challenge["status"] == "mfa_required", "otro login simultáneo obtiene un desafío 2FA")
+wait_next_step()
+used_code = totp(secret)
+status, tablet = call("POST", "/auth/mfa/verify", {
+    "challenge_id": tablet_challenge["challenge_id"], "code": used_code,
+})
+check(status == 200, "primer desafío verificado → sesión en el segundo navegador")
+status, body = call("POST", "/auth/mfa/verify", {
+    "challenge_id": phone_challenge["challenge_id"], "code": used_code,
+})
+check(status == 401 and body["error"] == "invalid_code", "un código TOTP ya usado no se reutiliza")
+wait_next_step()
+status, body = call("POST", "/auth/mfa/verify", {
+    "challenge_id": phone_challenge["challenge_id"], "code": totp(secret),
+})
+check(status == 409 and body["error"] == "active_session",
+      "desafío concurrente tampoco puede abrir una segunda sesión")
+status, body = call("GET", "/auth/me", token=tablet["access_token"])
+check(status == 200, "el segundo inicio no revoca la sesión que ya estaba activa")
 status, body = call("GET", "/auth/sessions", token=tablet["access_token"])
-check(status == 200 and len(body["items"]) == 1, "GET /sessions: solo la tablet")
+check(status == 200 and len(body["items"]) == 1, "GET /sessions: solo el segundo navegador")
 
 print("\n4. Sesión persistente: rotación del refresh token")
 status, body = call("POST", "/auth/refresh", {"refresh_token": tablet["refresh_token"], "device_id": TABLET})
@@ -122,16 +139,16 @@ for invalid_length_password in ("Abcdef1!X", "Abcdef1!Xyz"):
 new_password = "Abcdef1!Xy"
 status, body = call("POST", "/auth/password", {"current_password": PASSWORD, "new_password": new_password, "code": totp(secret)}, phone["access_token"])
 check(status == 200, "cambio de contraseña con contraseña actual + 2FA")
+status, body = call("POST", "/auth/logout", token=phone["access_token"])
+check(status == 200, "logout libera la sesión única")
+status, body = call("GET", "/auth/me", token=phone["access_token"])
+check(status == 401, "después del logout el token ya no sirve")
 status, body = login(PATIENT, TABLET)
 check(status == 401, "la contraseña anterior ya no funciona")
 status, body = login(PATIENT, TABLET, new_password)
 check(status == 200 and body["status"] == "mfa_required", "la nueva sí")
-status, body = call("POST", "/auth/logout", token=phone["access_token"])
-check(status == 200, "logout")
-status, body = call("GET", "/auth/me", token=phone["access_token"])
-check(status == 401, "después del logout el token ya no sirve")
 
-print("\n8. Cierre de sesión por 30 minutos de inactividad")
+print("\n8. Cierre de sesión por 60 minutos de inactividad")
 status, body = login(PATIENT, PHONE, new_password)
 check(status == 200 and body["status"] == "mfa_required", "login para probar el límite de inactividad")
 wait_next_step()
@@ -139,7 +156,7 @@ status, idle_access_session = call("POST", "/auth/mfa/verify", {
     "challenge_id": body["challenge_id"], "code": totp(secret),
 })
 check(status == 200, "sesión de prueba iniciada")
-sql(f"update usb_sessions set last_seen_at = systimestamp - numtodsinterval(31, 'MINUTE') "
+sql(f"update usb_sessions set last_seen_at = systimestamp - numtodsinterval(61, 'MINUTE') "
     f"where device_id = '{PHONE}' and revoked_at is null;")
 status, body = call("GET", "/auth/me", token=idle_access_session["access_token"])
 check(status == 401, "API protegida revoca la sesión al detectar inactividad")
@@ -156,12 +173,12 @@ status, idle_refresh_session = call("POST", "/auth/mfa/verify", {
     "challenge_id": body["challenge_id"], "code": totp(secret),
 })
 check(status == 200, "segunda sesión de prueba iniciada")
-sql(f"update usb_sessions set last_seen_at = systimestamp - numtodsinterval(31, 'MINUTE') "
+sql(f"update usb_sessions set last_seen_at = systimestamp - numtodsinterval(61, 'MINUTE') "
     f"where device_id = '{TABLET}' and revoked_at is null;")
 status, body = call("POST", "/auth/refresh", {
     "refresh_token": idle_refresh_session["refresh_token"], "device_id": TABLET,
 })
-check(status == 401 and body["error"] == "session_expired", "refresh tras 30 minutos inactivo -> 401")
+check(status == 401 and body["error"] == "session_expired", "refresh tras 60 minutos inactivo -> 401")
 
 print("\n9. Bloqueo por intentos fallidos")
 for _ in range(5):

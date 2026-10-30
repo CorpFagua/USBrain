@@ -16,8 +16,8 @@ create table if not exists usb_auth_config (
 
 merge into usb_auth_config c
 using (
-  select 'ACCESS_TTL_SECONDS' k, '600' v, 'Vida del access token (segundos). Corto, como en la banca.' d from dual union all
-  select 'REFRESH_IDLE_MINUTES', '30', 'Minutos sin actividad antes de exigir login + 2FA de nuevo.' from dual union all
+  select 'ACCESS_TTL_SECONDS' k, '300' v, 'Vida del access token (segundos). Corto, como en la banca.' d from dual union all
+  select 'REFRESH_IDLE_MINUTES', '60', 'Minutos sin actividad antes de exigir login + 2FA de nuevo.' from dual union all
   select 'SESSION_ABSOLUTE_DAYS', '90', 'Vida máxima de una sesión aunque se use a diario.' from dual union all
   select 'CHALLENGE_TTL_SECONDS', '300', 'Tiempo para ingresar el código 2FA tras la contraseña.' from dual union all
   select 'CHALLENGE_MAX_ATTEMPTS', '5', 'Intentos de código 2FA por desafío.' from dual union all
@@ -25,12 +25,21 @@ using (
   select 'LOCKOUT_MINUTES', '15', 'Duración del bloqueo temporal de la cuenta.' from dual union all
   select 'PBKDF2_ITERATIONS', '310000', 'Iteraciones PBKDF2-HMAC-SHA256 para contraseñas nuevas.' from dual union all
   select 'TOTP_WINDOW_STEPS', '1', 'Pasos de 30 s de tolerancia al desfase de reloj.' from dual union all
-  select 'MAX_SESSIONS_PER_USER', '1', 'Sesiones activas por usuario. Con 1, iniciar sesión en otro dispositivo o pestaña cierra la anterior.' from dual union all
+  select 'MAX_SESSIONS_PER_USER', '1', 'Sesiones activas permitidas por usuario. Al alcanzar el límite se rechaza el nuevo inicio de sesión.' from dual union all
   select 'TOTP_ISSUER', 'USBrain', 'Nombre que muestra la app autenticadora.' from dual
 ) s on (c.config_key = s.k)
 when not matched then insert (config_key, config_value, description) values (s.k, s.v, s.d);
 
+update usb_auth_config
+   set description = 'Sesiones activas permitidas por usuario. Al alcanzar el límite se rechaza el nuevo inicio de sesión.'
+ where config_key = 'MAX_SESSIONS_PER_USER';
+
 delete from usb_auth_config where config_key = 'REFRESH_IDLE_DAYS';
+
+-- Política actual: token de acceso más corto (5 min) y sesión más tolerante a la inactividad (60 min).
+-- Aplica también a bases ya instaladas con los valores anteriores (600 s / 30 min).
+update usb_auth_config set config_value = '300' where config_key = 'ACCESS_TTL_SECONDS' and config_value = '600';
+update usb_auth_config set config_value = '60' where config_key = 'REFRESH_IDLE_MINUTES' and config_value = '30';
 
 -- Llaves de la aplicación. En producción: mover a Oracle Wallet / TDE.
 create table if not exists usb_app_keys (
@@ -313,6 +322,8 @@ create index if not exists usb_recovery_user_ix on usb_recovery_codes (user_id);
 create table if not exists usb_auth_events (
   event_id    number generated always as identity primary key,
   user_id     number,
+  actor_user_id number,
+  target_user_id number,
   session_id  number,
   event_type  varchar2(40) not null,
   ip_address  varchar2(64),
@@ -322,6 +333,24 @@ create table if not exists usb_auth_events (
   created_at  timestamp with time zone default systimestamp not null
 );
 create index if not exists usb_events_user_ix on usb_auth_events (user_id, created_at);
+
+-- Existing databases: retain the legacy subject column and add explicit actor/target fields
+-- so administrator actions can be attributed without parsing free-form detail text.
+declare
+  l_count number;
+begin
+  select count(*) into l_count from user_tab_columns
+   where table_name = 'USB_AUTH_EVENTS' and column_name = 'ACTOR_USER_ID';
+  if l_count = 0 then
+    execute immediate 'alter table usb_auth_events add (actor_user_id number)';
+  end if;
+  select count(*) into l_count from user_tab_columns
+   where table_name = 'USB_AUTH_EVENTS' and column_name = 'TARGET_USER_ID';
+  if l_count = 0 then
+    execute immediate 'alter table usb_auth_events add (target_user_id number)';
+  end if;
+end;
+/
 
 -- Errores inesperados de la API (nunca se devuelven al cliente).
 create table if not exists usb_error_log (

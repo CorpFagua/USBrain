@@ -4,7 +4,7 @@
 #   cp .env.example .env        # y pon ORACLE_PWD (ver INSTALACION.md)
 #   docker compose up -d        # la primera vez tarda 5–15 min
 #
-# APEX es opcional: si descomprimes APEX en backend/apex/, ORDS lo instala en la base.
+# APEX es opcional. Se instala una sola vez en la base y ORDS sirve sus imágenes estáticas.
 # Los nombres de contenedor y los puertos se pueden cambiar en backend/.env.
 name: usbrain
 
@@ -38,11 +38,11 @@ services:
       APEX_PWD: ${APEX_PWD:-${ORACLE_PWD}}
     ports:
       - "${ORDS_PORT:-8080}:8080"
+      - "${APEX_PORT:-8182}:8080"
     volumes:
       - ords-config:/etc/ords/config
-      # Opcional: APEX descomprimido aquí (backend/apex/images, apexins.sql…). Si la carpeta
-      # está vacía, ORDS se instala sin APEX y la API de la app funciona igual.
-      - ./apex:/opt/oracle/apex
+      # Sirve los recursos estáticos sin repetir la instalación de APEX en cada inicio.
+      - ./apex/images:/opt/oracle/apex/images:ro
 
 volumes:
   oradata:
