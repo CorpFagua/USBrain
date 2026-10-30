@@ -107,6 +107,25 @@ declare
     values (p_task, p_date, p_value, p_note, p_phase, p_minutes, p_phase = 'LINEA_BASE', l_ana);
   end entry;
 
+  -- Deja una conducta en B1 con A1 del p_a_start al día anterior a p_b_start: fases, tareas
+  -- retiradas y número de fase de cada registro, como si el terapeuta hubiera cambiado de fase.
+  procedure set_ab_phases(p_behavior number, p_a_start date, p_b_start date) is
+    l_change timestamp with time zone := from_tz(cast(p_b_start as timestamp), 'America/Bogota');
+  begin
+    update usb_behaviors set baseline_open = false, phase_seq = 2, baseline_closed_at = l_change
+     where behavior_id = p_behavior;
+    delete from usb_behavior_phases where behavior_id = p_behavior;
+    insert into usb_behavior_phases (behavior_id, phase_seq, phase, started_at, ended_at, started_by)
+    values (p_behavior, 1, 'LINEA_BASE', from_tz(cast(p_a_start as timestamp), 'America/Bogota'), l_change, l_therapist);
+    insert into usb_behavior_phases (behavior_id, phase_seq, phase, started_at, started_by)
+    values (p_behavior, 2, 'INTERVENCION', l_change, l_therapist);
+    update usb_tasks set phase_seq = case when phase = 'LINEA_BASE' then 1 else 2 end,
+                         retired_at = case when phase = 'LINEA_BASE' then l_change end
+     where behavior_id = p_behavior;
+    update usb_task_entries e set phase_seq = (select t.phase_seq from usb_tasks t where t.task_id = e.task_id)
+     where task_id in (select task_id from usb_tasks where behavior_id = p_behavior);
+  end set_ab_phases;
+
   procedure widget_entry(p_task number, p_widget varchar2, p_date date, p_time varchar2,
                          p_value number, p_note varchar2 default null) is
   begin
@@ -230,24 +249,32 @@ begin
      where case_id = l_case and name = 'Episodios de ansiedad en clase';
   end if;
 
-  -- Serie ficticia A-B para la demostración estadística de ansiedad: 30 días
-  -- sin tratamiento y 30 con tratamiento. Se conserva una sola suma diaria.
+  -- Serie A-B de "Episodios de ansiedad en clase" (caso individual de Ana): A1 = 1–30 sep
+  -- sin tratamiento, B1 = 1–30 oct con tratamiento; un total diario por día. Se rehace en
+  -- cada semilla para que la gráfica del terapeuta y el panel estadístico cuenten lo mismo.
   select b.behavior_id into l_b from usb_behaviors b
    where b.case_id = l_case and b.name = 'Episodios de ansiedad en clase';
-  delete from usb_task_entries where task_id in (
-    select task_id from usb_tasks where behavior_id = l_b and dimension = 'FRECUENCIA'
-  );
+  update usb_behaviors set baseline_dimensions = 'FRECUENCIA' where behavior_id = l_b;
   select min(task_id) into l_t_base from usb_tasks
-   where behavior_id = l_b and dimension = 'FRECUENCIA' and phase = 'LINEA_BASE';
+   where behavior_id = l_b and task_type = 'REGISTRO_AUTONOMO' and dimension = 'FRECUENCIA' and phase = 'LINEA_BASE';
   select min(task_id) into l_t_treatment from usb_tasks
-   where behavior_id = l_b and dimension = 'FRECUENCIA' and phase = 'INTERVENCION';
+   where behavior_id = l_b and task_type = 'REGISTRO_AUTONOMO' and dimension = 'FRECUENCIA' and phase = 'INTERVENCION';
+  delete from usb_task_entries where task_id in (
+    select task_id from usb_tasks where behavior_id = l_b and task_type = 'REGISTRO_AUTONOMO');
+  -- Sobran registros autónomos que medían otra dimensión sin línea base o duplicaban el principal.
+  delete from usb_tasks
+   where behavior_id = l_b and task_type = 'REGISTRO_AUTONOMO' and task_id not in (l_t_base, l_t_treatment);
   for d in 0..29 loop
-    entry(l_t_base, date '2026-09-01' + d,
-          5 + mod(d * 3 + 1, 3), 'Dato ficticio: total diario de episodios sin tratamiento.', 'LINEA_BASE', 60);
+    entry(l_t_base, date '2026-09-01' + d, 5 + mod(d * 7 + 2, 4),
+          'Dato ficticio: total diario de episodios sin tratamiento.', 'LINEA_BASE', 60);
     entry(l_t_treatment, date '2026-10-01' + d,
-          greatest(0, round(4 - d * 3 / 29 + mod(d, 4) * 0.35)),
+          greatest(0, round(4.6 - d * 0.09 + (mod(d * 3, 4) - 1.5) * 0.8)),
           'Dato ficticio: total diario de episodios durante tratamiento.', 'INTERVENCION', 60);
   end loop;
+  -- Las mediciones configurables de la intervención no pueden ser anteriores al tratamiento.
+  update usb_widget_entries set entry_date = entry_date + 30
+   where task_id in (select task_id from usb_tasks where behavior_id = l_b) and entry_date < date '2026-10-01';
+  set_ab_phases(l_b, date '2026-09-01', date '2026-10-01');
 
   -- Daniel Ruiz · insomnio ------------------------------------------------------
   l_case := ensure_patient(l_daniel, date '2003-02-20', 'Ing. Industrial · 8.º sem',
@@ -339,72 +366,172 @@ begin
     where behavior_id=l_b_sleep and phase='INTERVENCION';
   update usb_tasks set title='Cumplimiento de rutina nocturna', instructions='Completar lectura, respiracion y desconexion de pantallas; registrar el porcentaje.'
     where behavior_id=l_b_routine;
+
+  -- A1 del 1 al 14 de julio, estable (sin tendencia previa: si la línea base ya viniera bajando,
+  -- la mejora no se podría atribuir al tratamiento); B1 desde el 15 de julio, bajando.
+  select min(task_id) into l_t_base from usb_tasks where behavior_id=l_b_sleep and phase='LINEA_BASE';
+  select min(task_id) into l_t_sleep from usb_tasks where behavior_id=l_b_sleep and phase='INTERVENCION';
+  delete from usb_task_entries where task_id in (l_t_base, l_t_sleep);
+  for i in 0..13 loop
+    insert into usb_task_entries(task_id,entry_date,value,note,phase,phase_seq,observation_minutes,is_baseline,recorded_by)
+      values(l_t_base,date '2026-07-01'+i,48+(mod(i*5,7)-3)*2,'Semana de línea base; sin rutina estable.','LINEA_BASE',1,480,true,l_patient);
+  end loop;
+  for i in 0..76 loop
+    insert into usb_task_entries(task_id,entry_date,value,note,phase,phase_seq,observation_minutes,is_baseline,recorded_by)
+      values(l_t_sleep,date '2026-07-15'+i,greatest(10,round(44-i*0.28+(mod(i*3,5)-2)*2.5)),'Aplicó respiración y dejó el teléfono fuera de la habitación.','INTERVENCION',2,480,false,l_patient);
+  end loop;
+  for b in (select behavior_id from usb_behaviors where behavior_id in (l_b_sleep, l_b_routine)) loop
+    update usb_behaviors set baseline_open=false, phase_seq=2, baseline_closed_at=from_tz(timestamp '2026-07-15 00:00:00','America/Bogota')
+     where behavior_id=b.behavior_id;
+    delete from usb_behavior_phases where behavior_id=b.behavior_id;
+    insert into usb_behavior_phases(behavior_id,phase_seq,phase,started_at,ended_at,started_by)
+      values(b.behavior_id,1,'LINEA_BASE',from_tz(timestamp '2026-07-01 00:00:00','America/Bogota'),from_tz(timestamp '2026-07-15 00:00:00','America/Bogota'),l_therapist);
+    insert into usb_behavior_phases(behavior_id,phase_seq,phase,started_at,started_by)
+      values(b.behavior_id,2,'INTERVENCION',from_tz(timestamp '2026-07-15 00:00:00','America/Bogota'),l_therapist);
+    update usb_tasks set phase_seq=case when phase='LINEA_BASE' then 1 else 2 end,
+                         retired_at=case when phase='LINEA_BASE' then from_tz(timestamp '2026-07-15 00:00:00','America/Bogota') end
+     where behavior_id=b.behavior_id;
+  end loop;
   commit;
 end;
 /
 
 -- -----------------------------------------------------------------------------
--- Cohorte ficticia agregada: 200 pacientes, 30 días sin tratamiento y 30 días
--- con tratamiento. Solo contiene frecuencia de episodios de ansiedad y se usa
--- exclusivamente en el análisis poblacional del superadministrador.
+-- Estudio de grupo con datos sintéticos: 200 participantes con "Episodios de ansiedad en
+-- clase", 30 días sin tratamiento (A1, 1–30 sep) y 30 con tratamiento (B1, 1–30 oct).
+--   · study_code agrupa sus conductas: el panel hace una prueba pareada (n = participantes)
+--     y nunca las mezcla con el caso individual de Ana, aunque se llamen igual.
+--   · Cuentas sintéticas: deshabilitadas, sin contraseña, fuera de la app clínica y de la
+--     lista de usuarios. Las asigna un terapeuta propio de la cohorte.
+--   · Valores deterministas (sin aleatorios): la semilla da siempre el mismo resultado.
 -- -----------------------------------------------------------------------------
 declare
+  c_study    constant varchar2(40) := 'ANSIEDAD_COHORTE_2026';
+  c_count    constant pls_integer := 200;
   l_therapist number;
-  l_patient number;
-  l_case number;
+  l_patient  number;
+  l_case     number;
   l_behavior number;
-  l_base_task number;
-  l_treatment_task number;
-  l_email varchar2(200);
-  l_program varchar2(200);
-begin
-  select user_id into l_therapist from usb_users where email = 'e.patino@usb.edu.co';
-  for i in 1..200 loop
-    l_email := 'cohorte.ansiedad.' || lpad(i, 2, '0') || '@demo.usbrain.local';
-    l_program := case trunc(dbms_random.value(0, 4))
-      when 0 then 'Psicología'
-      when 1 then 'Ingeniería de Sistemas'
-      when 2 then 'Administración de Empresas'
-      else 'Ingeniería Industrial' end;
-    begin
-      select user_id into l_patient from usb_users where email = l_email;
-    exception when no_data_found then
-      l_patient := usb_auth.create_user(l_email, 'Paciente ficticio de cohorte ' || lpad(i, 2, '0'), 'PATIENT', '&dev_pwd');
-    end;
-    merge into usb_patient_profiles p using (select l_patient user_id from dual) s on (p.user_id = s.user_id)
-      when matched then update set p.therapist_id=l_therapist, p.birth_date=add_months(date '2008-06-15', -12 * trunc(dbms_random.value(0, 9))), p.program=l_program, p.condition='Cohorte ficticia de ansiedad'
-      when not matched then insert (user_id,therapist_id,birth_date,program,condition,color_argb)
-        values(l_patient,l_therapist,add_months(date '2008-06-15', -12 * trunc(dbms_random.value(0, 9))),l_program,'Cohorte ficticia de ansiedad',4286277314);
-    begin
-      select case_id into l_case from usb_cases where patient_id=l_patient;
-    exception when no_data_found then
-      insert into usb_cases(patient_id,title) values(l_patient,'Cohorte ficticia: episodios de ansiedad') returning case_id into l_case;
-    end;
-    begin
-      select behavior_id into l_behavior from usb_behaviors where case_id=l_case and name='Episodios de ansiedad en clase';
-    exception when no_data_found then
-      insert into usb_behaviors(case_id,name,operational_definition,behavior_type,baseline_open,baseline_closed_at,baseline_dimensions,created_by)
-        values(l_case,'Episodios de ansiedad en clase','Total diario ficticio de episodios observables durante actividades académicas.','DESADAPTATIVA',false,from_tz(cast(date '2026-09-30' as timestamp),'America/Bogota'),'FRECUENCIA',l_therapist)
-        returning behavior_id into l_behavior;
-    end;
-    begin select task_id into l_base_task from usb_tasks where behavior_id=l_behavior and phase='LINEA_BASE' and dimension='FRECUENCIA' fetch first 1 row only;
-    exception when no_data_found then
-      insert into usb_tasks(behavior_id,title,instructions,task_type,dimension,phase,is_recurring,frequency,created_by)
-        values(l_behavior,'Registro diario de ansiedad: línea base','Registrar el total diario de episodios.','REGISTRO_AUTONOMO','FRECUENCIA','LINEA_BASE',true,'Diaria',l_therapist) returning task_id into l_base_task;
-    end;
-    begin select task_id into l_treatment_task from usb_tasks where behavior_id=l_behavior and phase='INTERVENCION' and dimension='FRECUENCIA' fetch first 1 row only;
-    exception when no_data_found then
-      insert into usb_tasks(behavior_id,title,instructions,task_type,dimension,phase,is_recurring,frequency,created_by)
-        values(l_behavior,'Registro diario de ansiedad: tratamiento','Registrar el total diario de episodios durante el tratamiento.','REGISTRO_AUTONOMO','FRECUENCIA','INTERVENCION',true,'Diaria',l_therapist) returning task_id into l_treatment_task;
-    end;
-    delete from usb_task_entries where task_id in (l_base_task,l_treatment_task);
-    for d in 0..29 loop
-      insert into usb_task_entries(task_id,entry_date,value,note,phase,observation_minutes,is_baseline,recorded_by)
-        values(l_base_task,date '2026-09-01'+d,trunc(dbms_random.value(3,10)) + case when l_program='Administración de Empresas' then 1 else 0 end,'Dato sintético agregado de cohorte.','LINEA_BASE',60,true,l_patient);
-      insert into usb_task_entries(task_id,entry_date,value,note,phase,observation_minutes,is_baseline,recorded_by)
-        values(l_treatment_task,date '2026-10-01'+d,greatest(0,trunc(dbms_random.value(1,6))-floor(d/15)),'Dato sintético agregado de cohorte.','INTERVENCION',60,false,l_patient);
+  l_base     number;
+  l_treat    number;
+  l_program  varchar2(200);
+  l_extra    number;
+  l_value    number;
+
+  -- Cuenta sintética sin acceso (hash vacío: ninguna contraseña coincide).
+  function synthetic_user(p_email varchar2, p_name varchar2, p_role varchar2) return number is
+    l_id number;
+  begin
+    select user_id into l_id from usb_users where email = p_email;
+    update usb_users set full_name = p_name, status = 'DISABLED', is_synthetic = true where user_id = l_id;
+    return l_id;
+  exception
+    when no_data_found then
+      insert into usb_users (email, full_name, role, status, password_hash, password_salt,
+                             password_iterations, is_synthetic)
+      values (p_email, p_name, p_role, 'DISABLED', hextoraw('00'), hextoraw('00'), 0, true)
+      returning user_id into l_id;
+      return l_id;
+  end synthetic_user;
+
+  -- Borra a un participante sintético y todo su caso.
+  procedure purge_user(p_user_id number) is
+  begin
+    for c in (select case_id from usb_cases where patient_id = p_user_id) loop
+      delete from usb_task_entries where task_id in
+        (select t.task_id from usb_tasks t join usb_behaviors b on b.behavior_id = t.behavior_id where b.case_id = c.case_id);
+      delete from usb_widget_entries where task_id in
+        (select t.task_id from usb_tasks t join usb_behaviors b on b.behavior_id = t.behavior_id where b.case_id = c.case_id);
+      delete from usb_tasks where behavior_id in (select behavior_id from usb_behaviors where case_id = c.case_id);
+      update usb_behaviors set replacement_behavior_id = null where case_id = c.case_id;
+      delete from usb_behaviors where case_id = c.case_id;
+      delete from usb_cases where case_id = c.case_id;
     end loop;
+    delete from usb_patient_diagnoses where patient_id = p_user_id;
+    delete from usb_patient_profiles where user_id = p_user_id;
+    delete from usb_sessions where user_id = p_user_id;
+    delete from usb_login_challenges where user_id = p_user_id;
+    delete from usb_recovery_codes where user_id = p_user_id;
+    delete from usb_auth_events where user_id = p_user_id;
+    delete from usb_users where user_id = p_user_id;
+  end purge_user;
+begin
+  -- Versión anterior de la semilla: correos de 2 dígitos con contraseña de demo. Se eliminan.
+  for u in (select user_id from usb_users where regexp_like(email, '^cohorte\.ansiedad\.[0-9]{2}@demo\.usbrain\.local$')) loop
+    purge_user(u.user_id);
   end loop;
+
+  l_therapist := synthetic_user('terapeuta.cohorte@demo.usbrain.local', 'Terapeuta de cohorte (demo)', 'THERAPIST');
+
+  for i in 1..c_count loop
+    l_program := case mod(i, 4) when 0 then 'Psicología' when 1 then 'Ingeniería de Sistemas'
+                                when 2 then 'Administración de Empresas' else 'Ingeniería Industrial' end;
+    l_extra := case when mod(i, 4) = 2 then 1 else 0 end;
+    l_patient := synthetic_user('cohorte.ansiedad.' || lpad(i, 3, '0') || '@demo.usbrain.local',
+                                'Participante sintético ' || lpad(i, 3, '0'), 'PATIENT');
+    merge into usb_patient_profiles p using (select l_patient user_id from dual) s on (p.user_id = s.user_id)
+      when matched then update set p.therapist_id = l_therapist,
+        p.birth_date = add_months(date '2008-06-15', -12 * mod(i * 7, 9)),
+        p.program = l_program, p.condition = 'Estudio sintético de ansiedad'
+      when not matched then insert (user_id, therapist_id, birth_date, program, condition, color_argb)
+        values (l_patient, l_therapist, add_months(date '2008-06-15', -12 * mod(i * 7, 9)), l_program,
+                'Estudio sintético de ansiedad', 4286277314);
+    begin
+      select case_id into l_case from usb_cases where patient_id = l_patient;
+    exception when no_data_found then
+      insert into usb_cases (patient_id, title) values (l_patient, 'Estudio sintético: episodios de ansiedad')
+      returning case_id into l_case;
+    end;
+    begin
+      select behavior_id into l_behavior from usb_behaviors where case_id = l_case and study_code = c_study;
+    exception when no_data_found then
+      insert into usb_behaviors (case_id, name, operational_definition, behavior_type, baseline_open,
+                                 baseline_dimensions, study_code, created_by)
+      values (l_case, 'Episodios de ansiedad en clase',
+              'Total diario sintético de episodios observables durante actividades académicas.',
+              'DESADAPTATIVA', false, 'FRECUENCIA', c_study, l_therapist)
+      returning behavior_id into l_behavior;
+    end;
+    delete from usb_task_entries where task_id in (select task_id from usb_tasks where behavior_id = l_behavior);
+    delete from usb_tasks where behavior_id = l_behavior;
+    insert into usb_tasks (behavior_id, title, instructions, task_type, dimension, phase, phase_seq,
+                           is_recurring, frequency, retired_at, created_by)
+    values (l_behavior, 'Registro diario de ansiedad (A1)', 'Registrar el total diario de episodios.',
+            'REGISTRO_AUTONOMO', 'FRECUENCIA', 'LINEA_BASE', 1, true, 'Diaria',
+            from_tz(timestamp '2026-10-01 00:00:00', 'America/Bogota'), l_therapist)
+    returning task_id into l_base;
+    insert into usb_tasks (behavior_id, title, instructions, task_type, dimension, phase, phase_seq,
+                           is_recurring, frequency, created_by)
+    values (l_behavior, 'Registro diario de ansiedad (B1)', 'Registrar el total diario de episodios durante el tratamiento.',
+            'REGISTRO_AUTONOMO', 'FRECUENCIA', 'INTERVENCION', 2, true, 'Diaria', l_therapist)
+    returning task_id into l_treat;
+    for d in 0..29 loop
+      insert into usb_task_entries (task_id, entry_date, value, note, phase, phase_seq, observation_minutes, is_baseline, recorded_by)
+      values (l_base, date '2026-09-01' + d, 4 + mod(i * 7 + d * 3, 6) + l_extra,
+              'Dato sintético de estudio.', 'LINEA_BASE', 1, 60, true, l_patient);
+      -- Uno de cada diez participantes no responde al tratamiento: el grupo no es perfecto.
+      l_value := case when mod(i, 10) = 0 then 4 + mod(i * 5 + d * 2, 6) + l_extra
+                      else greatest(0, 3 + mod(i * 5 + d * 2, 4) - floor(d / 10) - mod(i, 3)) end;
+      insert into usb_task_entries (task_id, entry_date, value, note, phase, phase_seq, observation_minutes, is_baseline, recorded_by)
+      values (l_treat, date '2026-10-01' + d, l_value, 'Dato sintético de estudio.', 'INTERVENCION', 2, 60, false, l_patient);
+    end loop;
+    update usb_behaviors set baseline_open = false, phase_seq = 2,
+                             baseline_closed_at = from_tz(timestamp '2026-10-01 00:00:00', 'America/Bogota')
+     where behavior_id = l_behavior;
+    delete from usb_behavior_phases where behavior_id = l_behavior;
+    insert into usb_behavior_phases (behavior_id, phase_seq, phase, started_at, ended_at)
+    values (l_behavior, 1, 'LINEA_BASE', from_tz(timestamp '2026-09-01 00:00:00', 'America/Bogota'),
+            from_tz(timestamp '2026-10-01 00:00:00', 'America/Bogota'));
+    insert into usb_behavior_phases (behavior_id, phase_seq, phase, started_at)
+    values (l_behavior, 2, 'INTERVENCION', from_tz(timestamp '2026-10-01 00:00:00', 'America/Bogota'));
+  end loop;
+  commit;
+end;
+/
+
+-- Completa las fases de todo lo que la semilla creó con el helper genérico (A1/B1, tareas retiradas).
+begin
+  usb_sync_phases;
   commit;
 end;
 /

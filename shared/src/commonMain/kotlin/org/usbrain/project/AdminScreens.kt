@@ -90,6 +90,7 @@ internal fun AdminHomeScreen(state: PrototypeState, dark: Boolean, onToggleTheme
             StatTile("${state.patients.size}", "pacientes", MaterialTheme.colorScheme.onSurface)
         }
         AdminMessages(state)
+        if (state.can("settings.clinical")) ClinicalSettingsCard(state)
         if (state.can("audit.view") && data != null) {
             SectionLabel("Actividad de seguridad reciente")
             ElevatedCard(Modifier.fillMaxWidth()) {
@@ -127,6 +128,36 @@ internal fun AdminHomeScreen(state: PrototypeState, dark: Boolean, onToggleTheme
     }
 }
 
+/** Parámetros del flujo clínico; los aplica el servidor al cambiar de fase. */
+@Composable
+private fun ClinicalSettingsCard(state: PrototypeState) {
+    LaunchedEffect(state.minPhaseObservations) { state.draftMinPhaseObservations = state.minPhaseObservations.toString() }
+    SectionLabel("Parámetros clínicos")
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Mínimo de observaciones por fase", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Días con registro que necesita cada dimensión medida para que el terapeuta pueda terminar una fase (A1, B1, A2…). Entre 3 y 30; el análisis estadístico pide al menos 3.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    state.draftMinPhaseObservations,
+                    { state.draftMinPhaseObservations = it.filter(Char::isDigit).take(2) },
+                    Modifier.weight(1f),
+                    label = { Text("Días") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                Button(onClick = { state.saveClinicalSettings() }, enabled = !state.busy) { Text("Guardar") }
+            }
+            state.settingsInfo?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = LocalUsBrainSemantic.current.success) }
+            state.settingsError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        }
+    }
+}
+
 private fun eventLabel(type: String): String = when (type) {
     "LOGIN_SUCCESS" -> "Inicio de sesión"
     "LOGIN_BAD_PASSWORD" -> "Contraseña incorrecta"
@@ -142,6 +173,7 @@ private fun eventLabel(type: String): String = when (type) {
     "ADMIN_USER_CREATED" -> "Usuario creado"
     "ADMIN_USER_UPDATED" -> "Usuario modificado"
     "ADMIN_USER_PERMISSIONS" -> "Permisos individuales modificados"
+    "SETTINGS_UPDATED" -> "Parámetros clínicos modificados"
     "ROLE_CREATED" -> "Rol creado"
     "ROLE_UPDATED" -> "Rol modificado"
     "ROLE_DELETED" -> "Rol borrado"

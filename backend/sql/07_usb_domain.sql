@@ -25,6 +25,10 @@ create or replace package usb_domain authid definer as
                            p_replacement_id number) return number;
   procedure configure_baseline(p_behavior_id number, p_dimensions json_array_t);
   procedure close_baseline(p_behavior_id number);
+  -- Termina la fase actual y abre la siguiente (A1 → B1 → A2 → B2…). Devuelve el número de fase nuevo.
+  function advance_phase(p_behavior_id number) return number;
+  -- Días con registro que necesita cada dimensión medida para terminar una fase.
+  function min_phase_observations return number;
   function create_task(p_request json_object_t) return number;
   function record_entry(p_task_id number, p_date date, p_value number, p_note varchar2,
                         p_observation_minutes number) return number;
@@ -156,6 +160,15 @@ create or replace package body usb_domain as
     end if;
   end require_patient_owner;
 
+  -- Una actividad de una fase ya terminada queda como historial: no admite registros nuevos.
+  procedure require_active_task(p_task usb_tasks%rowtype) is
+  begin
+    if p_task.retired_at is not null then
+      fail(usb_auth.e_conflict, 'phase_closed',
+           'Esta actividad pertenece a una fase que ya terminó. Registra en las actividades de la fase actual.');
+    end if;
+  end require_active_task;
+
   procedure validate_entry_date(p_date date) is
   begin
     if p_date is null then
@@ -181,6 +194,7 @@ create or replace package body usb_domain as
     select json_serialize(
       json_object(
         'today' value to_char(l_today, 'YYYY-MM-DD'),
+        'settings' value json_object('min_phase_observations' value min_phase_observations),
         'user' value json_object(
           'id' value to_char(u.user_id), 'email' value u.email,
           'full_name' value u.full_name, 'role' value u.role,
@@ -221,6 +235,15 @@ create or replace package body usb_domain as
                         'replacement_behavior_id' value to_char(b.replacement_behavior_id),
                         'baseline_dimensions' value
                           json('["' || replace(b.baseline_dimensions, ',', '","') || '"]'),
+                        'phase_seq' value b.phase_seq,
+                        'phases' value (
+                          select json_arrayagg(json_object(
+                                   'seq' value ph.phase_seq,
+                                   'phase' value ph.phase,
+                                   'started_on' value to_char(ph.started_at at time zone 'America/Bogota', 'YYYY-MM-DD'),
+                                   'ended_on' value to_char(ph.ended_at at time zone 'America/Bogota', 'YYYY-MM-DD'))
+                                 order by ph.phase_seq returning json)
+                            from usb_behavior_phases ph where ph.behavior_id = b.behavior_id),
                         'baseline_entries' value (
                           select json_arrayagg(
                             json_object(
@@ -230,10 +253,12 @@ create or replace package body usb_domain as
                               'value' value e.value,
                               'note' value nvl(e.note, ''),
                               'dimension' value bt.dimension,
+                              'phase_seq' value e.phase_seq,
                               'observation_minutes' value e.observation_minutes)
                             order by e.entry_date returning json)
                             from usb_task_entries e join usb_tasks bt on bt.task_id = e.task_id
-                           where bt.behavior_id = b.behavior_id and e.is_baseline),
+                           where bt.behavior_id = b.behavior_id and e.phase = 'LINEA_BASE'
+                             and bt.task_type = 'REGISTRO_AUTONOMO' and bt.widget_id is null),
                         'tasks' value (
                           select json_arrayagg(
                             json_object(
@@ -252,8 +277,11 @@ create or replace package body usb_domain as
                               'frequency' value t.frequency,
                               'reminder_active' value t.reminder_active,
                               'phase' value t.phase,
-                              -- Recurrente: pendiente hasta que se registre hoy. Única: pendiente hasta el primer registro.
-                              'status' value case when exists (
+                              'phase_seq' value t.phase_seq,
+                              'retired' value case when t.retired_at is not null then 'true' else 'false' end format json,
+                              -- Fase terminada: CERRADA. Recurrente: pendiente hasta que se registre hoy.
+                              -- Única: pendiente hasta el primer registro.
+                              'status' value case when t.retired_at is not null then 'CERRADA' when exists (
                                   select 1 from usb_task_entries x
                                    where x.task_id = t.task_id
                                      and (not t.is_recurring or x.entry_date = l_today)
@@ -269,6 +297,7 @@ create or replace package body usb_domain as
                                     'value' value e.value,
                                     'note' value nvl(e.note, ''),
                                     'phase' value e.phase,
+                                    'phase_seq' value e.phase_seq,
                                     'observation_minutes' value e.observation_minutes)
                                   order by e.entry_date returning json)
                                   from usb_task_entries e where e.task_id = t.task_id),
@@ -390,53 +419,172 @@ create or replace package body usb_domain as
                                replacement_behavior_id, created_by)
     values (l_case_id, l_name, l_definition, p_type, l_function_id, l_replacement, usb_auth.current_user_id)
     returning behavior_id into l_behavior_id;
+    -- Toda conducta empieza en A1 (línea base).
+    insert into usb_behavior_phases (behavior_id, phase_seq, phase, started_by)
+    values (l_behavior_id, 1, 'LINEA_BASE', usb_auth.current_user_id);
     return l_behavior_id;
   end create_behavior;
 
+  function min_phase_observations return number is
+    l_value number;
+  begin
+    select to_number(value) into l_value from usb_app_settings where setting_key = 'MIN_PHASE_OBSERVATIONS';
+    return greatest(3, l_value);
+  exception
+    when no_data_found or value_error or invalid_number then
+      return 3;
+  end min_phase_observations;
+
+  -- A1, B1, A2, B2…: impar = línea base (A), par = intervención (B).
+  function phase_code(p_seq number) return varchar2 is
+  begin
+    return case when mod(p_seq, 2) = 1 then 'A' || ((p_seq + 1) / 2) else 'B' || (p_seq / 2) end;
+  end phase_code;
+
+  function dimension_label(p_dimension varchar2) return varchar2 is
+  begin
+    return case p_dimension when 'FRECUENCIA' then 'frecuencia' when 'DURACION' then 'duración'
+                            else 'intensidad' end;
+  end dimension_label;
+
+  function dimensions_label(p_dimensions varchar2) return varchar2 is
+    l_label varchar2(200);
+  begin
+    for d in (select regexp_substr(p_dimensions, '[^,]+', 1, level) dimension
+                from dual connect by level <= regexp_count(p_dimensions, ',') + 1) loop
+      l_label := l_label || case when l_label is not null then ', ' end || dimension_label(d.dimension);
+    end loop;
+    return l_label;
+  end dimensions_label;
+
+  function load_behavior(p_behavior_id number) return usb_behaviors%rowtype is
+    l_behavior usb_behaviors%rowtype;
+  begin
+    select * into l_behavior from usb_behaviors where behavior_id = p_behavior_id for update;
+    return l_behavior;
+  end load_behavior;
+
+  -- Crea las actividades de registro autónomo de la fase actual (A1, B1, A2…): la medición
+  -- continua que se grafica y compara entre fases. Las dimensiones se eligen en A1 antes del
+  -- primer registro; después quedan fijas para que todas las fases midan lo mismo.
   procedure configure_baseline(p_behavior_id number, p_dimensions json_array_t) is
+    l_behavior   usb_behaviors%rowtype;
     l_dimensions varchar2(100);
     l_dimension  varchar2(20);
+    l_count      number;
+    l_code       varchar2(10);
   begin
     require_case_editor(patient_of_behavior(p_behavior_id));
-    if p_dimensions is not null then
-      for i in 0 .. p_dimensions.get_size - 1 loop
-        l_dimension := p_dimensions.get_string(i);
-        if l_dimension not in ('FRECUENCIA', 'DURACION', 'INTENSIDAD') or l_dimension is null then
-          fail(usb_auth.e_bad_request, 'invalid_dimension', 'Dimensión de medición no válida.');
-        end if;
-        if instr(',' || l_dimensions || ',', ',' || l_dimension || ',') = 0 then
-          l_dimensions := l_dimensions || case when l_dimensions is not null then ',' end || l_dimension;
-        end if;
-      end loop;
+    l_behavior := load_behavior(p_behavior_id);
+    l_code := phase_code(l_behavior.phase_seq);
+    select count(*) into l_count
+      from usb_task_entries e join usb_tasks t on t.task_id = e.task_id
+     where t.behavior_id = p_behavior_id;
+
+    if l_behavior.phase_seq = 1 and l_count = 0 then
+      if p_dimensions is not null then
+        for i in 0 .. p_dimensions.get_size - 1 loop
+          l_dimension := p_dimensions.get_string(i);
+          if l_dimension not in ('FRECUENCIA', 'DURACION', 'INTENSIDAD') or l_dimension is null then
+            fail(usb_auth.e_bad_request, 'invalid_dimension', 'Dimensión de medición no válida.');
+          end if;
+          if instr(',' || l_dimensions || ',', ',' || l_dimension || ',') = 0 then
+            l_dimensions := l_dimensions || case when l_dimensions is not null then ',' end || l_dimension;
+          end if;
+        end loop;
+      end if;
+      l_dimensions := nvl(l_dimensions, 'FRECUENCIA');
+      update usb_behaviors set baseline_dimensions = l_dimensions where behavior_id = p_behavior_id;
+      -- Si se cambió la elección antes de registrar nada, sobran las actividades de las dimensiones quitadas.
+      delete from usb_tasks t
+       where t.behavior_id = p_behavior_id and t.phase_seq = 1 and t.task_type = 'REGISTRO_AUTONOMO'
+         and t.widget_id is null and instr(',' || l_dimensions || ',', ',' || t.dimension || ',') = 0;
+    else
+      l_dimensions := l_behavior.baseline_dimensions;
     end if;
-    l_dimensions := nvl(l_dimensions, 'FRECUENCIA');
 
-    update usb_behaviors set baseline_dimensions = l_dimensions where behavior_id = p_behavior_id;
-
-    -- Una actividad diaria de registro autónomo por cada dimensión de la línea base.
+    -- Una actividad diaria de registro autónomo por dimensión, sin duplicar las que ya existen.
     for d in (select regexp_substr(l_dimensions, '[^,]+', 1, level) dimension
                 from dual connect by level <= regexp_count(l_dimensions, ',') + 1) loop
-      insert into usb_tasks (behavior_id, title, instructions, task_type, dimension, is_recurring,
-                             frequency, phase, created_by)
-      values (p_behavior_id,
-              case d.dimension
-                when 'FRECUENCIA' then 'Registrar frecuencia diaria'
-                when 'DURACION'   then 'Registrar duración diaria'
-                else                   'Registrar intensidad diaria' end,
-              case d.dimension
-                when 'FRECUENCIA' then 'Cuenta cuántas veces ocurrió la conducta en el día.'
-                when 'DURACION'   then 'Anota cuántos minutos duró la conducta en el día.'
-                else                   'Valora la intensidad de la conducta en una escala del 0 al 10.' end,
-              'REGISTRO_AUTONOMO', d.dimension, true, 'Diaria', 'LINEA_BASE', usb_auth.current_user_id);
+      select count(*) into l_count from usb_tasks
+       where behavior_id = p_behavior_id and phase_seq = l_behavior.phase_seq and retired_at is null
+         and task_type = 'REGISTRO_AUTONOMO' and widget_id is null and dimension = d.dimension;
+      if l_count = 0 then
+        insert into usb_tasks (behavior_id, title, instructions, task_type, dimension, is_recurring,
+                               frequency, phase, phase_seq, created_by)
+        values (p_behavior_id,
+                case d.dimension
+                  when 'FRECUENCIA' then 'Registrar frecuencia diaria'
+                  when 'DURACION'   then 'Registrar duración diaria'
+                  else                   'Registrar intensidad diaria' end
+                || ' (' || l_code || ')',
+                case d.dimension
+                  when 'FRECUENCIA' then 'Cuenta cuántas veces ocurrió la conducta en el día.'
+                  when 'DURACION'   then 'Anota cuántos minutos duró la conducta en el día.'
+                  else                   'Valora la intensidad de la conducta en una escala del 0 al 10.' end,
+                'REGISTRO_AUTONOMO', d.dimension, true, 'Diaria',
+                case when l_behavior.baseline_open then 'LINEA_BASE' else 'INTERVENCION' end,
+                l_behavior.phase_seq, usb_auth.current_user_id);
+      end if;
     end loop;
   end configure_baseline;
 
-  procedure close_baseline(p_behavior_id number) is
+  function advance_phase(p_behavior_id number) return number is
+    l_behavior usb_behaviors%rowtype;
+    l_min      number := min_phase_observations;
+    l_days     number;
+    l_next     number;
+    l_phase    varchar2(20);
   begin
     require_case_editor(patient_of_behavior(p_behavior_id));
+    l_behavior := load_behavior(p_behavior_id);
+    -- Cada dimensión medida necesita suficientes días con registro en la fase que termina:
+    -- sin eso no hay con qué comparar la fase siguiente.
+    for d in (select regexp_substr(l_behavior.baseline_dimensions, '[^,]+', 1, level) dimension
+                from dual connect by level <= regexp_count(l_behavior.baseline_dimensions, ',') + 1) loop
+      select count(distinct e.entry_date) into l_days
+        from usb_task_entries e join usb_tasks t on t.task_id = e.task_id
+       where t.behavior_id = p_behavior_id and t.task_type = 'REGISTRO_AUTONOMO' and t.widget_id is null
+         and t.dimension = d.dimension and e.phase_seq = l_behavior.phase_seq;
+      if l_days < l_min then
+        fail(usb_auth.e_conflict, 'insufficient_observations',
+             'Para terminar la fase ' || phase_code(l_behavior.phase_seq) || ' se necesitan al menos '
+             || l_min || ' días con registro de ' || dimension_label(d.dimension) || '; hay ' || l_days || '.');
+      end if;
+    end loop;
+
+    l_next := l_behavior.phase_seq + 1;
+    l_phase := case when mod(l_next, 2) = 1 then 'LINEA_BASE' else 'INTERVENCION' end;
+    -- Las actividades de la fase que termina ya no se registran; quedan como historial.
+    update usb_tasks set retired_at = systimestamp
+     where behavior_id = p_behavior_id and phase_seq = l_behavior.phase_seq and retired_at is null;
+    merge into usb_behavior_phases ph
+    using (select p_behavior_id behavior_id, l_behavior.phase_seq phase_seq from dual) x
+       on (ph.behavior_id = x.behavior_id and ph.phase_seq = x.phase_seq)
+     when matched then update set ph.ended_at = systimestamp
+     when not matched then insert (behavior_id, phase_seq, phase, ended_at)
+       values (x.behavior_id, x.phase_seq, case when mod(x.phase_seq, 2) = 1 then 'LINEA_BASE' else 'INTERVENCION' end, systimestamp);
+    insert into usb_behavior_phases (behavior_id, phase_seq, phase, started_by)
+    values (p_behavior_id, l_next, l_phase, usb_auth.current_user_id);
     update usb_behaviors
-       set baseline_open = false, baseline_closed_at = systimestamp
-     where behavior_id = p_behavior_id and baseline_open;
+       set phase_seq = l_next,
+           baseline_open = (l_phase = 'LINEA_BASE'),
+           baseline_closed_at = case when l_phase = 'INTERVENCION' then systimestamp else baseline_closed_at end
+     where behavior_id = p_behavior_id;
+    return l_next;
+  end advance_phase;
+
+  -- Compatibilidad con clientes anteriores: cerrar la línea base = pasar a la intervención.
+  procedure close_baseline(p_behavior_id number) is
+    l_open   boolean;
+    l_ignore number;
+  begin
+    require_case_editor(patient_of_behavior(p_behavior_id));
+    select baseline_open into l_open from usb_behaviors where behavior_id = p_behavior_id;
+    if not l_open then
+      fail(usb_auth.e_conflict, 'not_in_baseline', 'La línea base de esta conducta ya está cerrada.');
+    end if;
+    l_ignore := advance_phase(p_behavior_id);
   end close_baseline;
 
   -- ---------------------------------------------------------------------------
@@ -460,15 +608,16 @@ create or replace package body usb_domain as
     l_frequency   varchar2(60) := p_request.get_string('frequency');
     l_count       number;
     l_task_id     number;
+    l_behavior    usb_behaviors%rowtype;
   begin
     if l_behavior_id is null then
       fail(usb_auth.e_bad_request, 'missing_fields', 'Falta la conducta de la actividad.');
     end if;
     require_case_editor(patient_of_behavior(l_behavior_id));
     l_title := require_text(p_request.get_string('title'), 'Completa el nombre de la actividad.');
-    if l_phase not in ('LINEA_BASE', 'INTERVENCION') or l_phase is null then
-      fail(usb_auth.e_bad_request, 'invalid_phase', 'Fase no válida.');
-    end if;
+    -- La fase la decide la conducta, no el cliente: una tarea siempre pertenece a la fase actual.
+    l_behavior := load_behavior(l_behavior_id);
+    l_phase := case when l_behavior.baseline_open then 'LINEA_BASE' else 'INTERVENCION' end;
 
     if l_widget_id is not null then
       select count(*) into l_count from usb_widgets where widget_id = l_widget_id;
@@ -483,18 +632,26 @@ create or replace package body usb_domain as
       l_metric := null;
     end if;
 
+    -- En la línea base solo se observa: el tratamiento empieza con la intervención.
+    if l_behavior.baseline_open and l_task_type not in ('REGISTRO_AUTONOMO', 'MEDICION_CONFIGURABLE') then
+      fail(usb_auth.e_conflict, 'baseline_no_treatment',
+           'Durante la línea base solo se mide la conducta. Inicia la intervención para asignar ejercicios o actividades terapéuticas.');
+    end if;
+    -- Para comparar fases, el registro autónomo mide lo mismo que la línea base.
+    if l_task_type = 'REGISTRO_AUTONOMO'
+       and instr(',' || l_behavior.baseline_dimensions || ',', ',' || l_dimension || ',') = 0 then
+      fail(usb_auth.e_bad_request, 'dimension_not_measured',
+           'Esta conducta mide ' || dimensions_label(l_behavior.baseline_dimensions)
+           || '. Las demás dimensiones no tendrían línea base con la cual compararse.');
+    end if;
+
     insert into usb_tasks (behavior_id, title, instructions, task_type, dimension, metric_unit, widget_id,
                            therapeutic_goal, assigned_label, due_label, is_recurring, frequency,
-                           reminder_active, phase, created_by)
+                           reminder_active, phase, phase_seq, created_by)
     values (l_behavior_id, l_title, l_instruct, l_task_type, l_dimension, l_metric, l_widget_id, l_goal,
             l_assigned, l_due, l_recurring, case when l_recurring then l_frequency end,
-            l_reminder, l_phase, usb_auth.current_user_id)
+            l_reminder, l_phase, l_behavior.phase_seq, usb_auth.current_user_id)
     returning task_id into l_task_id;
-
-    -- La fase de la conducta avanza sola: una actividad de intervención cierra la línea base.
-    if l_phase = 'INTERVENCION' then
-      close_baseline(l_behavior_id);
-    end if;
     return l_task_id;
   end create_task;
 
@@ -505,11 +662,11 @@ create or replace package body usb_domain as
   function record_entry(p_task_id number, p_date date, p_value number, p_note varchar2,
                         p_observation_minutes number) return number is
     l_task          usb_tasks%rowtype := load_task(p_task_id);
-    l_baseline_open boolean;
     l_count         number;
     l_entry_id      number;
   begin
     require_patient_owner(l_task);
+    require_active_task(l_task);
     if l_task.widget_id is not null then
       fail(usb_auth.e_bad_request, 'invalid_task', 'Esta actividad se registra con su medición configurable.');
     end if;
@@ -526,21 +683,20 @@ create or replace package body usb_domain as
         from usb_task_entries e join usb_tasks t on t.task_id = e.task_id
        where t.behavior_id = l_task.behavior_id and t.task_type = 'REGISTRO_AUTONOMO'
          and t.widget_id is null and t.dimension = l_task.dimension
-         and e.phase = l_task.phase and e.entry_date = p_date;
+         and e.phase_seq = l_task.phase_seq and e.entry_date = p_date;
       if l_count > 0 then
         fail(usb_auth.e_conflict, 'duplicate_entry',
              'Ya existe un registro de esta tarea para el ' || format_date(p_date) || '.');
       end if;
     end if;
 
-    select baseline_open into l_baseline_open from usb_behaviors where behavior_id = l_task.behavior_id;
-
-    insert into usb_task_entries (task_id, entry_date, value, note, phase, observation_minutes,
+    -- La tarea está activa, así que su fase es la fase actual de la conducta.
+    insert into usb_task_entries (task_id, entry_date, value, note, phase, phase_seq, observation_minutes,
                                   is_baseline, recorded_by)
-    values (p_task_id, p_date, p_value, trim(p_note), l_task.phase,
+    values (p_task_id, p_date, p_value, trim(p_note), l_task.phase, l_task.phase_seq,
             case when l_task.task_type = 'REGISTRO_AUTONOMO' and l_task.dimension = 'FRECUENCIA'
                       and p_observation_minutes > 0 then p_observation_minutes end,
-            l_task.task_type = 'REGISTRO_AUTONOMO' and l_task.phase = 'LINEA_BASE' and l_baseline_open,
+            l_task.phase = 'LINEA_BASE',
             usb_auth.current_user_id)
     returning entry_id into l_entry_id;
     return l_entry_id;
@@ -568,6 +724,7 @@ create or replace package body usb_domain as
     l_entry_id number;
   begin
     require_patient_owner(l_task);
+    require_active_task(l_task);
     if l_task.widget_id is null then
       fail(usb_auth.e_bad_request, 'invalid_task', 'Esta actividad no usa una medición configurable.');
     end if;

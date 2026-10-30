@@ -50,9 +50,10 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.datetime.LocalDate
+import org.usbrain.project.data.AnalyticsGroupDto
 import org.usbrain.project.data.AnalyticsPointDto
-import org.usbrain.project.data.AnalyticsProgramGroupDto
 import org.usbrain.project.data.AnalyticsSeriesDto
+import org.usbrain.project.data.AnalyticsStudyDto
 
 private enum class AnalyticsView(val label: String) {
     SESSIONS("Por sesión"), WEEKLY("Semanal"), MONTHLY("Mensual"), CALENDAR("Calendario")
@@ -62,16 +63,18 @@ private enum class AnalyticsView(val label: String) {
 internal fun AdminAnalyticsScreen(state: PrototypeState) {
     LaunchedEffect(Unit) { state.loadAnalytics() }
     val dataset = state.analyticsData
-    // La API puede traer una serie por paciente. Para análisis poblacional se
-    // presenta una única frecuencia total por variable y no una lista repetida.
-    val series = aggregateSeriesForPicker(dataset?.series.orEmpty())
-    var selectedId by remember(series) { mutableStateOf(series.firstOrNull()?.id) }
-    val selected = series.firstOrNull { it.id == selectedId } ?: series.firstOrNull()
+    // Dos análisis distintos que no se mezclan: un caso individual (A1 vs B1 de un paciente)
+    // y un estudio de grupo (cada participante aporta su cambio; n = participantes).
+    val series = dataset?.series.orEmpty()
+    val studies = dataset?.studies.orEmpty()
+    val options = studies.map { "study:${it.id}" to "Estudio de grupo · ${it.behavior} · n=${it.participants.size}" } +
+        series.map { "case:${it.id}" to "Caso individual · ${it.behavior} · ${dimensionLabel(it.dimension)}" }
+    var selectedKey by remember(options) { mutableStateOf(options.firstOrNull()?.first) }
 
     ScreenScaffold {
         Text("Análisis estadístico", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(
-            "Comparación exploratoria entre línea base e intervención con datos mínimos seudonimizados.",
+            "Comparación exploratoria entre línea base (A1) e intervención (B1) con datos seudonimizados.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -92,40 +95,34 @@ internal fun AdminAnalyticsScreen(state: PrototypeState) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                         Text("Conexión activa", fontWeight = FontWeight.SemiBold, color = LocalUsBrainSemantic.current.success)
                         Text(dataset.source, style = MaterialTheme.typography.bodySmall)
-                        Text(
-                            "APEX y ORDS consultan el mismo esquema Oracle; no se necesita una segunda conexión ni importar archivos manualmente.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Pill("Seudonimizado", LocalUsBrainSemantic.current.success)
-                            Pill("${series.size} variables analizables", MaterialTheme.colorScheme.primary)
+                            Pill("${series.size} casos individuales", MaterialTheme.colorScheme.primary)
+                            Pill("${studies.size} estudios de grupo", MaterialTheme.colorScheme.primary)
                         }
                         Text(
-                            "Excluidos: nombres, correos, documentos, diagnósticos, notas y fechas exactas.",
+                            "Sin nombres, correos, documentos, diagnósticos ni notas. Los casos individuales incluyen la fecha de cada día (hace falta para ordenarlos); los estudios no incluyen ningún dato por persona.",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
 
-                if (series.isEmpty()) {
-                    Text("Se requieren al menos 3 registros de línea base y 3 de intervención para formar una serie.")
+                if (options.isEmpty()) {
+                    Text("Se requieren al menos 3 días con registro en A1 y 3 en B1 para formar una serie.")
                 } else {
                     DropdownField(
-                        label = "Variable para analizar",
-                        selectedLabel = selected?.let { "${it.behavior} · ${dimensionLabel(it.dimension)}" },
-                        placeholder = "Selecciona una serie",
-                        options = series.map { it.id to "${it.behavior} · ${dimensionLabel(it.dimension)}" },
-                        onSelect = { selectedId = it },
+                        label = "Qué analizar",
+                        selectedLabel = options.firstOrNull { it.first == selectedKey }?.second,
+                        placeholder = "Selecciona un caso o un estudio",
+                        options = options,
+                        onSelect = { selectedKey = it },
                         searchable = true,
                     )
-                    selected?.let { AnalyticsSeriesPanel(it) }
-                    GlobalAnalyticsPanel(
-                        series = series,
-                        groups = dataset.programGroups,
-                        ageGroups = dataset.ageGroups,
-                    )
+                    val key = selectedKey.orEmpty()
+                    studies.firstOrNull { "study:${it.id}" == key }?.let { StudyPanel(it) }
+                    series.firstOrNull { "case:${it.id}" == key }?.let { AnalyticsSeriesPanel(it) }
+                    if (series.isNotEmpty()) GlobalAnalyticsPanel(series)
                 }
             }
         }
@@ -172,25 +169,95 @@ private fun AnalyticsSeriesPanel(series: AnalyticsSeriesDto) {
         }
     }
 
+    HypothesisCard(result, series.unit, series.expectedDirection)
+}
+
+/** Estudio de grupo: promedio diario de los participantes y prueba pareada sobre sus cambios. */
+@Composable
+private fun StudyPanel(study: AnalyticsStudyDto) {
+    val result = remember(study) { analyzeStudy(study) }
+    // El gráfico usa el promedio diario del grupo; la prueba usa la media de cada participante.
+    val asSeries = remember(study) {
+        AnalyticsSeriesDto(study.id, study.behavior, study.dimension, study.unit, study.expectedDirection, study.baseline, study.intervention)
+    }
+    var view by remember { mutableStateOf(AnalyticsView.SESSIONS) }
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(study.behavior, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "Estudio de grupo · ${study.participants.size} participantes · ${dimensionLabel(study.dimension)} (${study.unit})",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                AnalyticsView.entries.filter { it != AnalyticsView.CALENDAR }.forEach { option ->
+                    FilterChip(selected = view == option, onClick = { view = option }, label = { Text(option.label) })
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Día relativo de cada participante", style = MaterialTheme.typography.labelMedium)
+                Text("Promedio del grupo · ${study.unit}", style = MaterialTheme.typography.labelMedium)
+            }
+            AnalyticsPhaseChart(asSeries, view)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                AnalyticsLegend(LocalUsBrainSemantic.current.baseline, "A1 · línea base")
+                AnalyticsLegend(LocalUsBrainSemantic.current.intervention, "B1 · intervención")
+            }
+        }
+    }
+    HypothesisCard(result, study.unit, study.expectedDirection)
+    GroupComparisonCard(
+        "Comparación por programa académico",
+        study.programGroups,
+        "Diferencias descriptivas: no permiten afirmar que una carrera cause más o menos ansiedad.",
+    )
+    GroupComparisonCard(
+        "Comparación por rango de edad",
+        study.ageGroups,
+        "Los rangos sirven para explorar patrones; no identifican personas ni prueban causalidad.",
+    )
+}
+
+/**
+ * Hipótesis, resultado y advertencias. La misma tarjeta sirve para un caso (t de Welch sobre
+ * los días de A1 y B1) y para un estudio (t pareada sobre el cambio de cada participante).
+ */
+@Composable
+private fun HypothesisCard(result: HypothesisResult?, unit: String, expectedDirection: String) {
+    val decrease = expectedDirection != "INCREASE"
+    val isStudy = result?.method == HypothesisMethod.PAIRED
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Prueba de hipótesis exploratoria", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            val decreaseExpected = series.expectedDirection != "INCREASE"
             Text(
-                if (decreaseExpected) "H₀: μ con tratamiento ≥ μ sin tratamiento." else "H₀: μ con intervención ≤ μ de línea base.",
+                when {
+                    isStudy && decrease -> "H₀: el cambio medio de los participantes (B1 − A1) es ≥ 0."
+                    isStudy -> "H₀: el cambio medio de los participantes (B1 − A1) es ≤ 0."
+                    decrease -> "H₀: la media diaria en B1 (intervención) es ≥ la de A1 (línea base)."
+                    else -> "H₀: la media diaria en B1 (intervención) es ≤ la de A1 (línea base)."
+                },
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                if (decreaseExpected) "H₁: μ con tratamiento < μ sin tratamiento (disminuyen los episodios diarios)."
-                else "H₁: μ con intervención > μ de línea base.",
+                when {
+                    isStudy && decrease -> "H₁: el cambio medio es < 0 (la conducta disminuye en el grupo)."
+                    isStudy -> "H₁: el cambio medio es > 0 (la conducta aumenta en el grupo)."
+                    decrease -> "H₁: la media diaria en B1 es < la de A1 (la conducta disminuye)."
+                    else -> "H₁: la media diaria en B1 es > la de A1 (la conducta aumenta)."
+                },
                 style = MaterialTheme.typography.bodySmall,
             )
             if (result == null) {
-                Text("No hay observaciones suficientes para calcular la comparación.", color = MaterialTheme.colorScheme.error)
+                Text(
+                    "No hay datos suficientes: se necesitan al menos 3 días por fase (caso) o 3 participantes (estudio).",
+                    color = MaterialTheme.colorScheme.error,
+                )
             } else {
+                Text("Método: ${result.method.label} · unilateral", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    StatTile(analyticsFmt(result.baselineMean), "promedio base", LocalUsBrainSemantic.current.baseline)
-                    StatTile(analyticsFmt(result.interventionMean), "promedio intervención", LocalUsBrainSemantic.current.intervention)
+                    StatTile(analyticsFmt(result.baselineMean), "media A1", LocalUsBrainSemantic.current.baseline)
+                    StatTile(analyticsFmt(result.interventionMean), "media B1", LocalUsBrainSemantic.current.intervention)
                     StatTile(analyticsP(result.pValue), "valor p", MaterialTheme.colorScheme.primary)
                 }
                 val significant = result.pValue < 0.05
@@ -201,22 +268,39 @@ private fun AnalyticsSeriesPanel(series: AnalyticsSeriesDto) {
                     color = if (significant) LocalUsBrainSemantic.current.success else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    "Cambio medio: ${signed(result.difference)} ${series.unit} · " +
-                        "cambio relativo: ${result.percentChange?.let { signed(it) + "%" } ?: "no calculable"} · " +
-                        "tamaño del efecto d: ${analyticsFmt(result.effectSize)}.",
+                    (if (isStudy) "n = ${result.baselineN} participantes" else "n = ${result.baselineN} días en A1 y ${result.interventionN} en B1") +
+                        " · t(${analyticsFmt(result.degreesOfFreedom)}) = ${analyticsFmt(result.statistic).replace('.', ',')}" +
+                        " · cambio medio ${signed(result.difference)} $unit" +
+                        " · cambio relativo ${result.percentChange?.let { signed(it) + "%" } ?: "no calculable"}" +
+                        " · tamaño del efecto ${if (isStudy) "dz" else "d"} = ${analyticsFmt(result.effectSize).replace('.', ',')}.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Text(
-                    if (result.supportsExpectedDirection) "La dirección observada coincide con la esperada para esta conducta."
-                    else "La dirección observada no coincide con la esperada para esta conducta.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                if (!result.supportsExpectedDirection) {
+                    Text("La dirección observada no coincide con la esperada para esta conducta.", style = MaterialTheme.typography.bodySmall)
+                }
             }
             Text(
-                "Advertencia metodológica: es una comparación demostrativa de dos medias. Las observaciones de series temporales pueden estar autocorrelacionadas; el resultado no demuestra causalidad ni reemplaza el análisis visual y clínico del profesional.",
+                if (isStudy) {
+                    "Advertencia metodológica: estudio pre-post sin grupo control. El cambio puede deberse a otros factores (paso del tiempo, regresión a la media); no demuestra causalidad."
+                } else {
+                    "Advertencia metodológica: los días de una misma persona se parecen entre sí (autocorrelación), lo que puede exagerar la significancia. No demuestra causalidad ni reemplaza el análisis visual y clínico del profesional."
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+@Composable
+private fun GroupComparisonCard(title: String, groups: List<AnalyticsGroupDto>, note: String) {
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            if (groups.isEmpty()) {
+                Text("No hay grupos con al menos 3 participantes; los grupos pequeños se ocultan para proteger la identidad.", style = MaterialTheme.typography.bodySmall)
+            } else groups.sortedWith(compareBy({ it.sort }, { it.group })).forEach { CohortComparisonRow(it) }
+            Text(note, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -320,7 +404,7 @@ private fun AnalyticsCalendar(series: AnalyticsSeriesDto) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Seleccionar periodo", fontWeight = FontWeight.SemiBold)
         if (dated.isEmpty()) {
-            Text("Por privacidad, los casos reales usan un calendario relativo.", style = MaterialTheme.typography.labelSmall)
+            Text("Esta serie no trae fechas: se muestra por día relativo.", style = MaterialTheme.typography.labelSmall)
             RelativeCalendar(all)
         } else selectedMonth?.let { month ->
             val index = months.indexOf(month)
@@ -374,21 +458,18 @@ private fun DatedMonthGrid(year: Int, month: Int, rows: List<Pair<LocalDate, Tri
     }
 }
 
+/** Todos los casos individuales a la vez; cada uno conserva sus fases, dimensión y unidad. */
 @Composable
-private fun GlobalAnalyticsPanel(
-    series: List<AnalyticsSeriesDto>,
-    groups: List<AnalyticsProgramGroupDto>,
-    ageGroups: List<AnalyticsProgramGroupDto>,
-) {
+private fun GlobalAnalyticsPanel(series: List<AnalyticsSeriesDto>) {
     var expanded by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         OutlinedButton(onClick = { expanded = !expanded }) {
-            Text(if (expanded) "Minimizar vista global" else "Vista global")
+            Text(if (expanded) "Minimizar vista global" else "Vista global de casos")
         }
     }
     if (!expanded) return
-    Text("Vista global", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-    Text("Todas las gráficas conservan sus fases, dimensión y unidad de medida.", style = MaterialTheme.typography.bodySmall)
+    Text("Vista global de casos individuales", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+    Text("Cada gráfica conserva sus fases, dimensión y unidad de medida.", style = MaterialTheme.typography.bodySmall)
     series.forEach { item ->
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -398,62 +479,14 @@ private fun GlobalAnalyticsPanel(
             }
         }
     }
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Comparación por programa académico", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            if (groups.isEmpty()) {
-                Text("Todavía no hay grupos con al menos 3 participantes y datos en ambas fases. Se ocultan los grupos pequeños para proteger la identidad.", style = MaterialTheme.typography.bodySmall)
-            } else groups.forEach { group ->
-                CohortComparisonRow(group)
-            }
-            Text("Estas diferencias son descriptivas: no permiten afirmar que una carrera cause más o menos estrés.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Frecuencia de episodios por rango de edad", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text("Cohorte ficticia de 50 pacientes · promedio diario de episodios", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (ageGroups.isEmpty()) {
-                Text("Aún no hay datos suficientes de la cohorte para agrupar por edad.", style = MaterialTheme.typography.bodySmall)
-            } else ageGroups.forEach { group ->
-                CohortComparisonRow(group)
-            }
-            Text("Los rangos de edad y programas sirven para explorar patrones. No identifican personas ni prueban causalidad.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
 }
 
-/** Consolida las series homónimas para evitar exponer un menú por paciente. */
-private fun aggregateSeriesForPicker(source: List<AnalyticsSeriesDto>): List<AnalyticsSeriesDto> =
-    source.groupBy { it.behavior to it.dimension }.values.map { matching ->
-        if (matching.size == 1) matching.first() else {
-            val first = matching.first()
-            first.copy(
-                id = "total:${first.behavior}:${first.dimension}",
-                behavior = "Frecuencia total de ${first.behavior.lowercase()}",
-                unit = "episodios diarios (total)",
-                baseline = mergeDailyPoints(matching.flatMap { it.baseline }),
-                intervention = mergeDailyPoints(matching.flatMap { it.intervention }),
-            )
-        }
-    }.sortedBy { it.behavior }
-
-private fun mergeDailyPoints(points: List<AnalyticsPointDto>): List<AnalyticsPointDto> =
-    points.groupBy { it.day }.entries.sortedBy { it.key }.mapIndexed { index, (day, daily) ->
-        AnalyticsPointDto(
-            session = index + 1,
-            day = day,
-            date = daily.firstOrNull()?.date,
-            value = daily.sumOf { it.value },
-        )
-    }
-
 @Composable
-private fun CohortComparisonRow(group: AnalyticsProgramGroupDto) {
+private fun CohortComparisonRow(group: AnalyticsGroupDto) {
     val change = if (group.baselineMean == 0.0) null else (group.interventionMean - group.baselineMean) / group.baselineMean * 100
-    Text(group.program, fontWeight = FontWeight.SemiBold)
+    Text(group.group, fontWeight = FontWeight.SemiBold)
     Text(
-        "n=${group.participants} · sin tratamiento ${analyticsFmt(group.baselineMean)} · con tratamiento ${analyticsFmt(group.interventionMean)} episodios/día" +
+        "n=${group.participants} · A1 ${analyticsFmt(group.baselineMean)} · B1 ${analyticsFmt(group.interventionMean)} por día" +
             (change?.let { " · ${signed(it)}%" } ?: ""),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,

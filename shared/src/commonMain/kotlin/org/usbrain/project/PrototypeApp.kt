@@ -429,19 +429,19 @@ internal fun DropdownField(
 }
 
 @Composable
-private fun PhasePill(phase: Phase) {
+private fun PhasePill(phase: Phase, code: String? = null) {
     val s = LocalUsBrainSemantic.current
     val c = if (phase == Phase.LINEA_BASE) s.baseline else s.intervention
-    Pill(phase.label, c)
+    Pill(code?.let { "$it · ${phase.label}" } ?: phase.label, c)
 }
 
 @Composable
 private fun StatusPill(status: TaskStatus) {
     val s = LocalUsBrainSemantic.current
-    if (status == TaskStatus.COMPLETADA) {
-        Pill("Completada", s.success)
-    } else {
-        Pill("Pendiente", s.warning)
+    when (status) {
+        TaskStatus.COMPLETADA -> Pill("Completada", s.success)
+        TaskStatus.CERRADA -> Pill("Fase terminada", MaterialTheme.colorScheme.onSurfaceVariant)
+        TaskStatus.PENDIENTE -> Pill("Pendiente", s.warning)
     }
 }
 
@@ -576,7 +576,7 @@ private fun monthLabel(key: String): String {
 private fun TrendChart(
     behavior: Behavior,
     dimension: Dimension,
-    phase: Phase,
+    phaseSeq: Int,
     yMax: Double,
     periodKey: String?,
     monthlyPanel: Boolean,
@@ -590,7 +590,7 @@ private fun TrendChart(
     val baseC = s.baseline
     val intC = s.intervention
     val rawSeries = behavior.chartValuesFor(dimension)
-        .filter { it.first.phase == phase }
+        .filter { it.first.phaseSeq == phaseSeq }
         .map { it.first.date to it.second }
         .filter { periodKey == null || monthKey(it.first) == periodKey }
         .sortedBy { it.first }
@@ -657,8 +657,7 @@ private fun TrendChart(
 @Composable
 private fun ChartCard(behavior: Behavior, dimension: Dimension = behavior.dimension, monthlyPanel: Boolean = false) {
     val s = LocalUsBrainSemantic.current
-    val baselineRecords = behavior.baselineEntries.filter { it.dimension == dimension }
-    val interventionRecords = behavior.recordsFor(dimension).filter { it.phase == Phase.INTERVENCION }
+    val dimensionRecords = behavior.recordsFor(dimension)
     val yMax = behavior.chartValuesFor(dimension).maxOfOrNull { it.second }?.let { kotlin.math.ceil(it) } ?: 1.0
     val availableMonths = behavior.chartValuesFor(dimension).map { monthKey(it.first.date) }.distinct().sorted()
     var selectedPeriod by remember(behavior.id, dimension) { mutableStateOf("GLOBAL") }
@@ -683,7 +682,7 @@ private fun ChartCard(behavior: Behavior, dimension: Dimension = behavior.dimens
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-                PhasePill(if (behavior.baselineOpen) Phase.LINEA_BASE else Phase.INTERVENCION)
+                PhasePill(behavior.currentPhase.phase, behavior.currentPhase.code)
             }
             Spacer(Modifier.height(10.dp))
             if (monthlyPanel) {
@@ -708,19 +707,21 @@ private fun ChartCard(behavior: Behavior, dimension: Dimension = behavior.dimens
             }
             Spacer(Modifier.height(6.dp))
             val effectiveMonth = selectedMonth.takeIf { monthlyPanel }
-            val hasBaseline = baselineRecords.any { effectiveMonth == null || monthKey(it.date) == effectiveMonth }
-            val hasIntervention = interventionRecords.any { effectiveMonth == null || monthKey(it.date) == effectiveMonth }
-            PhaseChartSection("Línea base de conducta", hasBaseline) {
-                TrendChart(behavior, dimension, Phase.LINEA_BASE, yMax, effectiveMonth, monthlyPanel)
-            }
-            Spacer(Modifier.height(14.dp))
-            PhaseChartSection("Conducta en intervención", hasIntervention) {
-                TrendChart(behavior, dimension, Phase.INTERVENCION, yMax, effectiveMonth, monthlyPanel)
+            // Una sección por fase del diseño (A1, B1, A2, B2…), en orden: así se ve si la conducta
+            // cambia cada vez que se introduce o se retira la intervención.
+            behavior.phases.forEachIndexed { index, span ->
+                val hasRecords = dimensionRecords.any {
+                    it.phaseSeq == span.seq && (effectiveMonth == null || monthKey(it.date) == effectiveMonth)
+                }
+                if (index > 0) Spacer(Modifier.height(14.dp))
+                PhaseChartSection(phaseSectionTitle(span), hasRecords) {
+                    TrendChart(behavior, dimension, span.seq, yMax, effectiveMonth, monthlyPanel)
+                }
             }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                LegendDot(s.baseline, "Línea base (${behavior.observationCountFor(dimension)} obs.)")
-                LegendDot(s.intervention, "Intervención")
+                LegendDot(s.baseline, "Línea base (A)")
+                LegendDot(s.intervention, "Intervención (B)")
             }
             Text(
                 "Seguimiento: día de observación · Medición: ${axisUnit(dimension)} · $expectedDirection",
@@ -728,13 +729,13 @@ private fun ChartCard(behavior: Behavior, dimension: Dimension = behavior.dimens
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
             )
-            val baselineAverage = baselineRecords.map { it.valueForChart() }.takeIf { it.isNotEmpty() }?.average()
-            val interventionAverage = interventionRecords.map { it.valueForChart() }.takeIf { it.isNotEmpty() }?.average()
-            if (baselineAverage != null && interventionAverage != null) {
-                val change = interventionAverage - baselineAverage
-                val direction = if (change < 0) "disminuyó" else if (change > 0) "aumentó" else "se mantuvo"
+            val averages = behavior.phases.mapNotNull { span ->
+                dimensionRecords.filter { it.phaseSeq == span.seq }.map { it.valueForChart() }
+                    .takeIf { it.isNotEmpty() }?.let { span.code to it.average() }
+            }
+            if (averages.size >= 2) {
                 Text(
-                    "Lectura inicial: el promedio ${direction} de ${fmt(baselineAverage)} a ${fmt(interventionAverage)} entre línea base e intervención.",
+                    "Promedio por fase: " + averages.joinToString(" → ") { (code, mean) -> "$code ${fmt(mean)}" } + ".",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
@@ -842,6 +843,19 @@ private fun WidgetChartCard(task: TrackTask, widget: WidgetConfig) {
             )
         }
     }
+}
+
+private fun shortDate(iso: String?): String? = iso?.split("-")?.takeIf { it.size == 3 }?.let { "${it[2].toInt()}/${it[1].toInt()}" }
+
+private fun phaseSectionTitle(span: PhaseSpan): String {
+    val from = shortDate(span.startedOn)
+    val to = shortDate(span.endedOn)
+    val period = when {
+        from != null && to != null -> " · $from – $to"
+        from != null -> " · desde $from"
+        else -> ""
+    }
+    return span.label + period
 }
 
 @Composable
@@ -2232,24 +2246,11 @@ private fun TherapistBehaviorScreen(state: PrototypeState) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PhasePill(if (behavior.baselineOpen) Phase.LINEA_BASE else Phase.INTERVENCION)
+            PhasePill(behavior.currentPhase.phase, behavior.currentPhase.code)
             Pill(behavior.type.label, MaterialTheme.colorScheme.onSurfaceVariant)
-            Pill(behavior.dimension.label, MaterialTheme.colorScheme.onSurfaceVariant)
+            behavior.baselineDimensions.forEach { Pill(it.label, MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        Text(
-            "${behavior.observationCount} observaciones de línea base · " + if (behavior.baselineOpen) {
-                "línea base abierta: las nuevas actividades registrarán observaciones iniciales."
-            } else {
-                "línea base cerrada el ${behavior.baselineClosedOn}: los datos quedan como referencia fija."
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (behavior.baselineOpen && state.canEditCases) {
-            OutlinedButton(onClick = { state.closeBaseline(behavior.id) }, Modifier.fillMaxWidth()) {
-                Text("Cerrar línea base")
-            }
-        }
+        PhaseControlCard(state, behavior)
         // Pestañas: "Actividades" (donde vive el botón + de crear) y "Análisis gráfico" (la
         // evolución de la conducta) separan gestión de datos y su lectura visual, en vez de
         // apilar todo en una sola pantalla larga. El selector y su contenido comparten una
@@ -2320,6 +2321,85 @@ private fun TherapistBehaviorScreen(state: PrototypeState) {
             }
         }
         Spacer(Modifier.height(72.dp)) // deja aire para que el FAB no tape el panel
+    }
+}
+
+/**
+ * Fase de la conducta en el diseño A-B-A-B: una sola a la vez y solo hacia adelante. La cambia
+ * el terapeuta cuando cada dimensión medida tiene el mínimo de días con registro (lo define la
+ * administración); al cambiar, las actividades de la fase que termina quedan como historial.
+ */
+@Composable
+private fun PhaseControlCard(state: PrototypeState, behavior: Behavior) {
+    val s = LocalUsBrainSemantic.current
+    val current = behavior.currentPhase
+    val minimum = state.minPhaseObservations
+    val missing = behavior.missingObservations(minimum)
+    val hasMeasurement = behavior.tasks.any { it.taskType == TaskType.REGISTRO_AUTONOMO && it.widgetConfig == null && !it.retired }
+    val nextCode = phaseCode(behavior.phaseSeq + 1)
+    var confirming by remember(behavior.id, behavior.phaseSeq) { mutableStateOf(false) }
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Fase actual: ${current.label}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(
+                behavior.phases.joinToString("   ·   ") { phaseSectionTitle(it) },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            behavior.baselineDimensions.forEach { dimension ->
+                val days = behavior.observationDaysIn(behavior.phaseSeq, dimension)
+                Text(
+                    "${dimension.label}: $days de $minimum días con registro" + if (days >= minimum) " ✓" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (days >= minimum) s.success else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (state.canEditCases) {
+                if (!hasMeasurement) {
+                    Text(
+                        "Esta fase todavía no tiene registro diario de la conducta: sin él no habrá datos para comparar con las demás fases.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = s.warning,
+                    )
+                    OutlinedButton(onClick = { state.createPhaseMeasurements(behavior.id) }, Modifier.fillMaxWidth(), enabled = !state.busy) {
+                        Text("Crear registro diario (${current.code}): ${behavior.baselineDimensions.joinToString { it.label.lowercase() }}")
+                    }
+                }
+                if (confirming) {
+                    Text(
+                        if (behavior.baselineOpen) {
+                            "Al iniciar la intervención $nextCode, las actividades de ${current.code} se cierran y quedan como historial. No se puede deshacer."
+                        } else {
+                            "Al retirar la intervención empieza la línea base $nextCode: las actividades de ${current.code} se cierran y quedan como historial. No se puede deshacer."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { confirming = false; state.advancePhase(behavior.id) }, Modifier.weight(1f)) { Text("Confirmar") }
+                        OutlinedButton(onClick = { confirming = false }, Modifier.weight(1f)) { Text("Cancelar") }
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = { state.phaseError = null; confirming = true },
+                        Modifier.fillMaxWidth(),
+                        enabled = missing.isEmpty() && !state.busy,
+                    ) {
+                        Text(
+                            if (behavior.baselineOpen) "Terminar ${current.code} e iniciar la intervención $nextCode"
+                            else "Retirar la intervención: nueva línea base $nextCode",
+                        )
+                    }
+                    if (missing.isNotEmpty()) {
+                        Text(
+                            "Para terminar ${current.code}, cada dimensión necesita al menos $minimum días con registro.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            state.phaseError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        }
     }
 }
 
@@ -2614,21 +2694,19 @@ private fun TherapistNewTaskScreen(state: PrototypeState) {
                 }
             }
         }
-        Column {
+        state.draftBehaviorId?.let(state::behavior)?.let { behaviorForTask -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             FieldLabel("Fase de la actividad")
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Phase.entries.forEach { phase ->
-                    TabChip(
-                        selected = state.draftTaskPhase == phase,
-                        onClick = {
-                            state.draftTaskPhase = phase
-                            state.draftReminderActive = phase == Phase.INTERVENCION
-                        },
-                        label = phase.label,
-                    )
-                }
-            }
-        }
+            PhasePill(behaviorForTask.currentPhase.phase, behaviorForTask.currentPhase.code)
+            Text(
+                if (behaviorForTask.baselineOpen) {
+                    "La actividad pertenece a la fase actual. En la línea base solo se mide la conducta; los ejercicios y actividades terapéuticas se asignan al iniciar la intervención."
+                } else {
+                    "La actividad pertenece a la fase actual. Para medir, usa la misma dimensión de la línea base: ${behaviorForTask.baselineDimensions.joinToString { it.label.lowercase() }}."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } }
         Column {
             FieldLabel("Nombre de la actividad")
             OutlinedTextField(state.draftTaskTitle, { state.draftTaskTitle = it }, Modifier.fillMaxWidth(), placeholder = { Text("Ej.: Registrar cada episodio de rascado") }, singleLine = true)

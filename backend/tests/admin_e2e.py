@@ -47,7 +47,7 @@ check(superadmin["user"]["role"] == "SUPERADMIN" and "roles.manage" in superadmi
 check(admin["user"]["profile"] == "ADMIN" and "roles.manage" not in admin["user"]["permissions"],
       "el admin tiene interfaz de administración pero no gestiona roles")
 data = overview(S)
-check(len(data["permissions"]) >= 12 and find(data["roles"], id="SUPERADMIN")["is_locked"],
+check(len(data["permissions"]) >= 14 and find(data["roles"], id="SUPERADMIN")["is_locked"],
       "overview: catálogo de permisos y rol SUPERADMIN bloqueado")
 therapists = [t["id"] for t in data["therapists"]]
 check(find(data["users"], email=E2E_THERAPIST)["id"] in therapists
@@ -56,13 +56,40 @@ check(find(data["users"], email=E2E_THERAPIST)["id"] in therapists
 check(data["events"] is not None and len(data["events"]) > 0, "el super admin ve la bitácora")
 check(overview(A)["users"] is not None, "el admin ve los usuarios")
 status, analytics = call("GET", "/admin/analytics", token=S)
-serialized_series = str(analytics["series"]).lower()
 check(status == 200 and analytics["status"] == "CONNECTED" and analytics["privacy"]["pseudonymized"],
       "el super admin recibe la exportación analítica seudonimizada")
-check(not any(field in serialized_series for field in ("@usb", "full_name", "diagnosis", "exact_date", "note")),
-      "la exportación no contiene identidad ni fechas exactas")
+serialized = str([analytics["series"], analytics["studies"]]).lower()
+check(not any(field in serialized for field in ("@usb", "@demo", "full_name", "diagnos", "note", "email", "patient")),
+      "la exportación no contiene nombres, correos, diagnósticos, notas ni ids de paciente")
+check(all(len(x["baseline"]) >= 3 and len(x["intervention"]) >= 3 for x in analytics["series"]),
+      "cada caso individual tiene al menos 3 días en A1 y 3 en B1")
+study = find(analytics["studies"], code="ANSIEDAD_COHORTE_2026")
+check(study is not None and len(study["participants"]) == 200
+      and all(set(p) == {"baseline_mean", "intervention_mean"} for p in study["participants"]),
+      "estudio de grupo: 200 participantes, una fila por persona sin identificador")
+check(all(point.get("date") is None for point in study["baseline"] + study["intervention"]),
+      "el estudio no trae fechas: solo el día relativo")
+check(all(g["participants"] >= 3 for g in study["program_groups"] + study["age_groups"]),
+      "los grupos por programa y edad solo aparecen con n ≥ 3")
+ana_series = [x for x in analytics["series"] if x["behavior"] == "Episodios de ansiedad en clase"]
+check(len(ana_series) == 1 and len(ana_series[0]["baseline"]) == 30,
+      "el caso individual de Ana sigue aparte aunque su conducta se llame igual que la del estudio")
+check(not any(u["email"].endswith("@demo.usbrain.local") for u in overview(S)["users"]),
+      "los participantes sintéticos no aparecen en la lista de usuarios")
 status, body = call("GET", "/admin/analytics", token=A)
 check(status == 403, "el administrador normal no accede al análisis seudonimizado")
+
+print("\n1b. Parámetros clínicos (settings.clinical)")
+status, body = call("POST", "/admin/settings", {"min_phase_observations": 2}, A)
+check(status == 400 and body["error"] == "invalid_setting", "mínimo de observaciones por debajo de 3 → 400")
+status, body = call("POST", "/admin/settings", {"min_phase_observations": 5}, A)
+check(status == 200, "el admin cambia el mínimo de observaciones por fase")
+status, data = call("GET", "/app/bootstrap", token=T)
+check(data["settings"]["min_phase_observations"] == 5, "el terapeuta recibe el valor nuevo")
+status, body = call("POST", "/admin/settings", {"min_phase_observations": 3}, S)
+check(status == 200, "el super admin lo devuelve a 3")
+status, body = call("POST", "/admin/settings", {"min_phase_observations": 4}, T)
+check(status == 403, "el terapeuta no cambia parámetros clínicos")
 status, body = call("GET", "/admin/overview", token=T)
 check(status == 403, "el terapeuta no entra a la administración")
 

@@ -39,6 +39,8 @@ begin
     'begin usb_app_api.configure_baseline(:authorization, :id, :body_text); end;');
   endpoint('behaviors/:id/close-baseline', 'POST',
     'begin usb_app_api.close_baseline(:authorization, :id); end;');
+  endpoint('behaviors/:id/next-phase', 'POST',
+    'begin usb_app_api.advance_phase(:authorization, :id); end;');
   endpoint('tasks', 'POST',
     'begin usb_app_api.create_task(:authorization, :body_text); end;');
   endpoint('tasks/:id/entries', 'POST',

@@ -51,9 +51,27 @@ enum class Dimension(val label: String, val unit: String, val hint: String) {
     INTENSIDAD("Intensidad", "/ 10", "¿Qué tan intensa fue? Escala de 0 a 10"),
 }
 
-enum class Phase(val label: String) { LINEA_BASE("Línea base"), INTERVENCION("Intervención") }
+enum class Phase(val label: String) {
+    LINEA_BASE("Línea base"), INTERVENCION("Intervención");
+
+    companion object {
+        /** Fase n del diseño A-B-A-B…: impar = línea base (A), par = intervención (B). */
+        fun ofSeq(seq: Int): Phase = if (seq % 2 == 1) LINEA_BASE else INTERVENCION
+    }
+}
+
+/** A1, B1, A2, B2… */
+fun phaseCode(seq: Int): String = if (seq % 2 == 1) "A${(seq + 1) / 2}" else "B${seq / 2}"
+
+/** Un tramo del diseño de la conducta (fechas AAAA-MM-DD; endedOn null = fase actual). */
+data class PhaseSpan(val seq: Int, val startedOn: String?, val endedOn: String?) {
+    val phase: Phase get() = Phase.ofSeq(seq)
+    val code: String get() = phaseCode(seq)
+    val label: String get() = "$code · ${phase.label}"
+}
 enum class BehaviorType(val label: String) { ADAPTATIVA("Adaptativa"), DESADAPTATIVA("Desadaptativa") }
-enum class TaskStatus { PENDIENTE, COMPLETADA }
+// CERRADA: la fase de la tarea terminó; queda como historial y ya no se registra.
+enum class TaskStatus { PENDIENTE, COMPLETADA, CERRADA }
 
 // Solo aplica a conductas desadaptativas; NO_APLICA es el valor por defecto sin análisis funcional.
 // Catálogo dinámico: el terapeuta puede registrar una función conductual nueva si el catálogo
@@ -287,6 +305,7 @@ data class TaskEntry(
     val note: String,
     val phase: Phase,
     val observationMinutes: Int? = null,
+    val phaseSeq: Int = if (phase == Phase.LINEA_BASE) 1 else 2,
 )
 
 data class BehaviorRecord(
@@ -299,6 +318,7 @@ data class BehaviorRecord(
     val phase: Phase,
     val dimension: Dimension,
     val observationMinutes: Int? = null,
+    val phaseSeq: Int = if (phase == Phase.LINEA_BASE) 1 else 2,
 )
 
 fun BehaviorRecord.valueForChart(): Double =
@@ -330,6 +350,9 @@ class TrackTask(
     val widgetConfig: WidgetConfig? = null,
     val therapeuticGoal: String? = null,
     widgetEntries: List<WidgetEntry> = emptyList(),
+    val phaseSeq: Int = if (phase == Phase.LINEA_BASE) 1 else 2,
+    // La fase terminó: la actividad es historial y ya no admite registros.
+    val retired: Boolean = false,
 ) {
     var status by mutableStateOf(status)
     val entries = entries.toMutableStateList()
@@ -357,7 +380,12 @@ class Behavior(
     baselineEntries: List<BehaviorRecord> = emptyList(),
     tasks: List<TrackTask> = emptyList(),
     baselineDimensions: List<Dimension> = baselineEntries.map { it.dimension }.distinct().ifEmpty { listOf(Dimension.FRECUENCIA) },
+    // Fase actual (1 = A1, 2 = B1, 3 = A2…) y el historial de fases del diseño.
+    val phaseSeq: Int = if (baselineOpenInitially) 1 else 2,
+    phases: List<PhaseSpan> = emptyList(),
 ) {
+    val phases: List<PhaseSpan> = phases.ifEmpty { (1..phaseSeq).map { PhaseSpan(it, null, null) } }
+    val currentPhase: PhaseSpan get() = phases.lastOrNull { it.seq == phaseSeq } ?: PhaseSpan(phaseSeq, null, null)
     var baselineOpen by mutableStateOf(baselineOpenInitially)
     var baselineClosedOn by mutableStateOf<String?>(if (baselineOpenInitially) null else "Demo")
     // Mutable para permitir enlazar la conducta de reemplazo más adelante, aunque este formulario no se reabra.
@@ -393,7 +421,7 @@ class Behavior(
 
     val records: List<BehaviorRecord>
         get() = tasks.filter { it.taskType == TaskType.REGISTRO_AUTONOMO && it.widgetConfig == null }.flatMap { task -> task.entries.filter { it.phase == Phase.INTERVENCION }.map { entry ->
-            BehaviorRecord("${task.id}-${entry.date}", task.id, id, entry.date, entry.value, entry.note, entry.phase, task.dimension, entry.observationMinutes)
+            BehaviorRecord("${task.id}-${entry.date}", task.id, id, entry.date, entry.value, entry.note, entry.phase, task.dimension, entry.observationMinutes, entry.phaseSeq)
         } } + baselineEntries
 
     // Actividades de esta conducta que usan el sistema nuevo de widgets configurables.
@@ -408,6 +436,14 @@ class Behavior(
 
     val observationCount: Int get() = baselineEntries.size
     fun observationCountFor(dimension: Dimension): Int = baselineEntries.count { it.dimension == dimension }
+
+    /** Días con registro de una dimensión en una fase: lo que se cuenta para poder terminarla. */
+    fun observationDaysIn(seq: Int, dimension: Dimension): Int =
+        records.filter { it.phaseSeq == seq && it.dimension == dimension }.map { it.date }.distinct().size
+
+    /** Dimensiones de la fase actual que aún no llegan al mínimo, con los días que llevan. */
+    fun missingObservations(minimum: Int): List<Pair<Dimension, Int>> =
+        baselineDimensions.map { it to observationDaysIn(phaseSeq, it) }.filter { it.second < minimum }
 }
 
 class SingleCase(
@@ -583,7 +619,15 @@ class PrototypeState(
     var draftTaskType by mutableStateOf(TaskType.REGISTRO_AUTONOMO)
     var draftTaskDimension by mutableStateOf(Dimension.FRECUENCIA)
     var draftMetricUnit by mutableStateOf(MetricUnit.SOLO_COMPLETADO)
+    // Solo informativa: el servidor asigna la fase actual de la conducta a cada tarea nueva.
     var draftTaskPhase by mutableStateOf(Phase.LINEA_BASE)
+    // Parámetros clínicos (bootstrap) y su edición desde administración.
+    var minPhaseObservations by mutableStateOf(3)
+    var draftMinPhaseObservations by mutableStateOf("3")
+    var settingsInfo by mutableStateOf<String?>(null)
+    var settingsError by mutableStateOf<String?>(null)
+    // Error al intentar cambiar de fase (p. ej. faltan observaciones).
+    var phaseError by mutableStateOf<String?>(null)
     var draftAssignedDate by mutableStateOf("Hoy")
     var draftBaselineDimensions = mutableStateListOf<Dimension>()
     var draftIsRecurring by mutableStateOf(false)
@@ -703,6 +747,7 @@ class PrototypeState(
     private suspend fun reload() {
         val data = api.bootstrap()
         serverToday = runCatching { LocalDate.parse(data.today) }.getOrNull()
+        minPhaseObservations = data.settings.minPhaseObservations
         // Si el super admin cambió los permisos del rol, la interfaz se ajusta en la siguiente recarga.
         permissions = data.user.permissions.toSet()
         val widgetConfigs = data.catalogs.widgets.map { it.toWidgetConfig() }
@@ -1592,10 +1637,41 @@ class PrototypeState(
         }
     }
 
-    fun closeBaseline(id: String) {
-        launch {
-            api.closeBaseline(id)
+    /**
+     * Termina la fase actual y abre la siguiente (A1 → B1 → A2…). La decide el terapeuta; el
+     * servidor exige el mínimo de observaciones y retira las actividades de la fase que termina.
+     */
+    fun advancePhase(id: String) {
+        phaseError = null
+        launch({ phaseError = it }) {
+            api.advancePhase(id)
             reload()
+        }
+    }
+
+    /** Crea el registro diario de la fase actual con las dimensiones de la conducta. */
+    fun createPhaseMeasurements(behaviorId: String) {
+        phaseError = null
+        val dimensions = behavior(behaviorId).baselineDimensions.map { it.name }
+        launch({ phaseError = it }) {
+            api.configureBaseline(behaviorId, dimensions)
+            reload()
+        }
+    }
+
+    fun saveClinicalSettings() {
+        settingsError = null
+        settingsInfo = null
+        val value = draftMinPhaseObservations.trim().toIntOrNull()
+        if (value == null || value !in 3..30) {
+            settingsError = "Escribe un número entero entre 3 y 30."
+            return
+        }
+        launch({ settingsError = it }) {
+            api.adminUpdateSettings(buildJsonObject { put("min_phase_observations", value) })
+            reload()
+            draftMinPhaseObservations = minPhaseObservations.toString()
+            settingsInfo = "Guardado: cada fase necesita al menos $value días con registro para terminar."
         }
     }
 
@@ -1641,8 +1717,8 @@ class PrototypeState(
         draftBehaviorId = behaviorId
         draftTaskTitle = ""
         draftTaskType = TaskType.REGISTRO_AUTONOMO
-        // Sugerido: si ya hay tareas de registro autónomo, se mantiene su tipo de medición; si no, Frecuencia.
-        draftTaskDimension = behavior(behaviorId).dimension
+        // El registro autónomo mide lo mismo que la línea base: se sugiere su primera dimensión.
+        draftTaskDimension = behavior(behaviorId).baselineDimensions.firstOrNull() ?: behavior(behaviorId).dimension
         draftMetricUnit = MetricUnit.SOLO_COMPLETADO
         val suggestedPhase = if (behavior(behaviorId).baselineOpen) Phase.LINEA_BASE else Phase.INTERVENCION
         draftTaskPhase = suggestedPhase

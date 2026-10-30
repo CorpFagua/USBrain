@@ -187,6 +187,11 @@ class UsBrainApi(
         postForId("app/behaviors/${behaviorId.encodeURLPathPart()}/close-baseline", JsonObject(emptyMap()), expectId = false)
     }
 
+    /** Termina la fase actual de la conducta y abre la siguiente (A1 → B1 → A2…). */
+    suspend fun advancePhase(behaviorId: String) {
+        postForId("app/behaviors/${behaviorId.encodeURLPathPart()}/next-phase", JsonObject(emptyMap()), expectId = false)
+    }
+
     suspend fun createTask(body: JsonObject): String = postForId("app/tasks", body)
 
     suspend fun recordEntry(taskId: String, body: JsonObject): String =
@@ -237,6 +242,11 @@ class UsBrainApi(
     /** Reemplaza las excepciones individuales del usuario: {"overrides": [...]}. */
     suspend fun adminSetUserPermissions(userId: String, body: JsonObject) {
         postForId("admin/users/${userId.encodeURLPathPart()}/permissions", body, expectId = false)
+    }
+
+    /** {"min_phase_observations": 3..30}; requiere settings.clinical. */
+    suspend fun adminUpdateSettings(body: JsonObject) {
+        postForId("admin/settings", body, expectId = false)
     }
 
     suspend fun adminCreateRole(body: JsonObject) {

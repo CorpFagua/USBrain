@@ -67,46 +67,61 @@ solo lectura (el servidor no deja que el terapeuta registre por el paciente).
 Login con contraseña + 2FA (TOTP) y sesiones persistentes por dispositivo sobre Oracle + ORDS en
 Docker. Instalación, contrato de la API y modelo de seguridad en [`backend/README.md`](backend/README.md).
 
+### Fases del diseño de caso único (A-B-A-B)
+
+Cada conducta está en **una sola fase a la vez** y solo avanza hacia adelante:
+**A1** (línea base) → **B1** (intervención) → **A2** (retiro: nueva línea base) → **B2**…
+
+- **El terapeuta decide** cuándo cambiar de fase (*Conducta → Terminar A1 e iniciar la intervención
+  B1*, o *Retirar la intervención: nueva línea base A2*). Para hacerlo, cada dimensión medida
+  necesita un **mínimo de días con registro** en la fase que termina. El mínimo lo configura la
+  administración (permiso `settings.clinical`, por defecto ADMIN y SUPERADMIN; entre 3 y 30).
+- **La fase de cada tarea la asigna el servidor**: siempre la fase actual de la conducta. Al cambiar
+  de fase, las actividades de la que termina quedan como historial ("Fase terminada") y ya no
+  admiten registros.
+- **En la línea base solo se mide**: no se asignan ejercicios ni actividades terapéuticas hasta
+  iniciar la intervención.
+- **Todas las fases miden lo mismo**: las dimensiones se eligen en A1 antes del primer registro y
+  quedan fijas. El terapeuta crea el registro diario de cada fase nueva cuando lo decide (no es
+  automático).
+- La gráfica del terapeuta muestra una sección por fase y el promedio de cada una
+  (p. ej. *A1 6,5 → B1 3,3 → A2 5,8*).
+
 ### Panel estadístico del superadministrador
 
-El perfil `SUPERADMIN` incluye la pestaña **Análisis**. La pantalla obtiene desde ORDS una
-exportación mínima del mismo esquema Oracle que puede administrarse con APEX; no requiere cargar
-archivos ni configurar una segunda conexión. El servidor entrega series seudonimizadas sin nombres,
-correos, documentos, diagnósticos ni notas. Para el análisis diario autorizado se incluye la fecha
-de observación, porque es necesaria para ordenar los 60 días y ubicar el inicio del tratamiento.
+El perfil `SUPERADMIN` incluye la pestaña **Análisis** (permiso `analytics.view`). Lee desde ORDS
+una exportación seudonimizada del mismo esquema Oracle que administra APEX. Tiene dos análisis que
+**no se mezclan**:
 
-#### Diseño de ansiedad: 60 días en dos fases
+| | Caso individual | Estudio de grupo |
+|---|---|---|
+| Pregunta | ¿Mejoró *este* paciente? | ¿El tratamiento funciona *en el grupo*? |
+| Datos | Total diario de A1 y de B1 de un paciente | Media diaria de cada participante en A1 y en B1 |
+| Prueba | t de Welch (gl de Welch–Satterthwaite) | t pareada sobre los cambios (n = participantes) |
+| Efecto | d de Cohen | dz |
 
-Para evaluar si el tratamiento reduce la frecuencia de episodios de ansiedad, se guarda una fila
-por cada episodio o registro recibido: `patient_id` interno, `behavior_id`, `entry_date`, `phase`
-(`LINEA_BASE` durante los 30 días sin tratamiento o `INTERVENCION` durante los 30 días con
-tratamiento) y el valor. Si un día tiene varias entradas, el análisis las **suma** y produce un
-único total diario; no debe usarse el promedio de entradas del mismo día.
+En ambos casos la hipótesis es **unilateral** en la dirección clínica esperada (una conducta
+desadaptativa debe bajar, una adaptativa subir): para la ansiedad, `H₀: μ_B1 ≥ μ_A1` frente a
+`H₁: μ_B1 < μ_A1`. Si un día tiene varios registros se **suman** en un único total diario. Con
+diseños A-B-A-B la prueba compara A1 contra B1; las fases siguientes se leen en la gráfica.
 
-La hipótesis es unilateral: `H₀: μ_C ≥ μ_S` frente a `H₁: μ_C < μ_S`, donde `μ_S` es la media
-diaria sin tratamiento y `μ_C` la media diaria con tratamiento. La gráfica principal conserva los
-60 días en una sola línea cronológica: línea base a la izquierda, una línea vertical en el inicio
-del tratamiento e intervención a la derecha. Así permite ver picos, variabilidad y tendencia,
-además del contraste de medias.
+Los estudios agrupan conductas por `study_code`, no por coincidencia del nombre: el caso de Ana y
+la cohorte se llaman igual y aun así se analizan por separado. El estudio incluye además grupos
+descriptivos por programa y por edad, solo cuando tienen al menos 3 participantes.
 
-Para cada variable con al menos tres observaciones de línea base y tres de intervención se muestra:
+Advertencias que muestra el panel: los días de una persona están autocorrelacionados (pueden
+exagerar la significancia del caso individual) y el estudio es pre-post sin grupo control; ninguno
+demuestra causalidad ni reemplaza el análisis visual y clínico.
 
-- gráfica separada por fases, con las variables descritas como **sesiones** y **medición/unidad**,
-  sin rótulos genéricos “X” o “Y”;
-- vistas por sesión, semana, mes y calendario relativo, con orden ascendente o descendente;
-- panorama global y comparación de dos variables mediante cambio porcentual normalizado, sin
-  mezclar minutos, frecuencia e intensidad en una escala común;
-- agregados descriptivos por programa académico solo cuando el grupo tiene al menos tres
-  participantes, para reducir el riesgo de reidentificación;
-- promedios de cada fase, diferencia, cambio porcentual y tamaño del efecto;
-- contraste exploratorio bilateral de medias con `H₀`, `H₁` y valor p;
+Datos de prueba (`install.sh --seed`), todos sintéticos y deterministas:
 
-- advertencia explícita de que una serie temporal puede estar autocorrelacionada y que el resultado
-  no demuestra causalidad ni sustituye el análisis visual y clínico.
+- **Ana Torres**: "Episodios de ansiedad en clase", A1 1–30 sep (media 6,5/día) y B1 1–30 oct (3,3/día).
+- **Laura Mendoza**: minutos para dormir, A1 1–14 jul estable (≈48 min) y B1 desde el 15 jul, bajando.
+- **Estudio `ANSIEDAD_COHORTE_2026`**: 200 participantes sintéticos (cuentas deshabilitadas, sin
+  contraseña, fuera de la app clínica y de la lista de usuarios), asignados a "Terapeuta de cohorte
+  (demo)", 30 días en A1 y 30 en B1; 1 de cada 10 no responde al tratamiento.
 
-La semilla de Laura Mendoza aporta una muestra sintética extensa (14 observaciones de línea base y
-77 de intervención) para probar el panel sin usar información de pacientes reales. El cálculo vive
-en Kotlin compartido (`Analytics.kt`) para producir el mismo resultado en web y Android.
+El cálculo vive en Kotlin compartido (`Analytics.kt`) para dar el mismo resultado en web y Android.
 
 ---
 

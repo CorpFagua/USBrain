@@ -44,8 +44,10 @@ admin_data = bootstrap(A)
 ana = find(admin_data["patients"], email="ana.torres@usbbog.edu.co")
 check(len(admin_data["patients"]) >= 3, "el admin ve todos los casos")
 anxiety = find(ana["case"]["behaviors"], name="Episodios de ansiedad en clase")
-check(len(anxiety["baseline_entries"]) == 4 and anxiety["baseline_open"] is False,
-      "caso demo de Ana: 4 observaciones de línea base, línea base cerrada")
+check(len(anxiety["baseline_entries"]) == 30 and anxiety["baseline_open"] is False and anxiety["phase_seq"] == 2,
+      "caso demo de Ana: 30 días de línea base (A1) y ahora en intervención (B1)")
+check([ph["seq"] for ph in anxiety["phases"]] == [1, 2] and anxiety["phases"][0]["ended_on"] == "2026-10-01",
+      "Ana: A1 del 1/9 al 1/10, B1 desde el 1/10 (coherente con sus registros)")
 ana_task = anxiety["tasks"][0]["id"]
 
 print("\n2. El terapeuta construye el caso")
@@ -120,18 +122,36 @@ check(len(behavior["baseline_entries"]) == 1 and behavior["baseline_entries"][0]
       "el registro cuenta como observación de línea base")
 check(find(behavior["tasks"], id=frequency_task)["status"] == "COMPLETADA", "la actividad queda completada hoy")
 
-print("\n5. Actividad de intervención con medición configurable")
+print("\n5. Fases A-B-A-B: una a la vez, decididas por el terapeuta")
+yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+before = (datetime.date.today() - datetime.timedelta(days=2)).isoformat()
+intensity_task = behavior["tasks"][1]["id"]
+
+
+def current(token=T):
+    return find(find(bootstrap(token)["patients"], id=patient_id)["case"]["behaviors"], id=maladaptive_id)
+
+
+status, body = call("POST", f"/app/behaviors/{maladaptive_id}/next-phase", token=T)
+check(status == 409 and body["error"] == "insufficient_observations",
+      "terminar A1 con 1 día de registro → 409 (mínimo configurable, 3 por defecto)")
+status, body = call("POST", "/app/tasks", {"behavior_id": maladaptive_id, "title": "Respiración guiada",
+                                           "task_type": "EJERCICIO_PRACTICA", "metric_unit": "SOLO_COMPLETADO"}, T)
+check(status == 409 and body["error"] == "baseline_no_treatment", "en la línea base no se asignan ejercicios")
+status, body = call("POST", "/app/tasks", {"behavior_id": maladaptive_id, "title": "Duración",
+                                           "task_type": "REGISTRO_AUTONOMO", "dimension": "DURACION"}, T)
+check(status == 400 and body["error"] == "dimension_not_measured",
+      "un registro autónomo de otra dimensión no tendría línea base → 400")
 status, body = call("POST", "/app/tasks", {
     "behavior_id": maladaptive_id, "title": "Emociones del día", "instructions": "Marca lo que sentiste.",
     "widget_id": widget_id, "phase": "INTERVENCION", "is_recurring": True, "frequency": "Diaria",
     "reminder_active": True, "assigned_date": "Hoy", "therapeutic_goal": "Identificar emociones"}, T)
-check(status == 200, "crear actividad de intervención")
+check(status == 200, "una medición configurable sí se puede crear en la línea base")
 widget_task = body["id"]
-behavior = find(bootstrap(T)["patients"][0]["case"]["behaviors"], id=maladaptive_id)
-task = find(behavior["tasks"], id=widget_task)
-check(behavior["baseline_open"] is False and behavior["baseline_closed_on"], "la intervención cierra la línea base sola")
-check(task["task_type"] == "MEDICION_CONFIGURABLE" and task["widget_id"] == widget_id, "queda como medición configurable")
-status, body = call("POST", "/app/tasks", {"behavior_id": maladaptive_id, "title": "", "phase": "INTERVENCION"}, T)
+task = find(current()["tasks"], id=widget_task)
+check(task["phase"] == "LINEA_BASE" and task["phase_seq"] == 1 and current()["baseline_open"],
+      "la fase la pone el servidor (ignora la que manda el cliente) y no cierra la línea base")
+status, body = call("POST", "/app/tasks", {"behavior_id": maladaptive_id, "title": ""}, T)
 check(status == 400, "actividad sin nombre → 400")
 entry = {"date": today, "time": "18:30", "note": "Tarde tranquila"}
 status, body = call("POST", f"/app/tasks/{widget_task}/widget-entries", {**entry, "value": {"values": ["Furia"]}}, P)
@@ -143,11 +163,48 @@ check(status == 409, "segundo registro del mismo día → 409")
 task = find(find(bootstrap(P)["patients"][0]["case"]["behaviors"], id=maladaptive_id)["tasks"], id=widget_task)
 check(task["widget_entries"][0]["selected_options"] == ["Calma"] and task["widget_entries"][0]["time"] == "18:30",
       "el registro guarda opciones, hora y nota")
-status, body = call("POST", f"/app/tasks/{frequency_task}/entries",
-                    {"date": (datetime.date.today() - datetime.timedelta(days=1)).isoformat(), "value": 3}, P)
-behavior = find(bootstrap(P)["patients"][0]["case"]["behaviors"], id=maladaptive_id)
-check(status == 200 and len(behavior["baseline_entries"]) == 1,
-      "con la línea base cerrada, los registros nuevos ya no la alteran")
+
+for day in (yesterday, before):
+    call("POST", f"/app/tasks/{frequency_task}/entries", {"date": day, "value": 3}, P)
+status, body = call("POST", f"/app/behaviors/{maladaptive_id}/next-phase", token=T)
+check(status == 409 and "intensidad" in body["message"],
+      "frecuencia ya tiene 3 días, pero intensidad no: cada dimensión medida necesita el mínimo")
+for day in (today, yesterday, before):
+    call("POST", f"/app/tasks/{intensity_task}/entries", {"date": day, "value": 6}, P)
+status, body = call("POST", f"/app/behaviors/{maladaptive_id}/next-phase", token=T)
+check(status == 200 and body["phase_seq"] == 2, "con el mínimo en ambas dimensiones, el terapeuta inicia B1")
+behavior = current()
+check(behavior["baseline_open"] is False and [ph["seq"] for ph in behavior["phases"]] == [1, 2]
+      and behavior["phases"][0]["ended_on"],
+      "la conducta queda en B1 y A1 registra su cierre")
+check(all(t["retired"] and t["status"] == "CERRADA" for t in behavior["tasks"] if t["phase_seq"] == 1),
+      "las actividades de A1 se cierran y quedan como historial")
+status, body = call("POST", f"/app/tasks/{frequency_task}/entries", {"date": today, "value": 1}, P)
+check(status == 409 and body["error"] == "phase_closed", "no se registra en una actividad de una fase terminada")
+status, body = call("POST", f"/app/tasks/{widget_task}/widget-entries", {**entry, "date": yesterday, "value": {"values": ["Calma"]}}, P)
+check(status == 409 and body["error"] == "phase_closed", "…tampoco en una medición configurable de esa fase")
+check(len(behavior["baseline_entries"]) == 6, "A1 conserva sus 6 registros (3 días de frecuencia y 3 de intensidad)")
+
+status, body = call("POST", f"/app/behaviors/{maladaptive_id}/baseline", {"dimensions": ["DURACION"]}, T)
+check(status == 200, "el terapeuta crea el registro diario de B1 (decide cuándo; no es automático)")
+behavior = current()
+b1_tasks = [t for t in behavior["tasks"] if t["phase_seq"] == 2 and t["task_type"] == "REGISTRO_AUTONOMO"]
+check(sorted(t["dimension"] for t in b1_tasks) == ["FRECUENCIA", "INTENSIDAD"] and all(t["phase"] == "INTERVENCION" for t in b1_tasks),
+      "B1 mide las mismas dimensiones que A1 (no se pueden cambiar después del primer registro)")
+status, body = call("POST", "/app/tasks", {"behavior_id": maladaptive_id, "title": "Respiración guiada",
+                                           "task_type": "EJERCICIO_PRACTICA", "metric_unit": "SOLO_COMPLETADO"}, T)
+check(status == 200, "en la intervención sí se asignan ejercicios")
+for t in b1_tasks:
+    for day in (today, yesterday, before):
+        call("POST", f"/app/tasks/{t['id']}/entries", {"date": day, "value": 2}, P)
+status, body = call("POST", f"/app/behaviors/{maladaptive_id}/next-phase", token=T)
+check(status == 200 and body["phase_seq"] == 3, "retirar la intervención abre una nueva línea base A2 (diseño A-B-A)")
+behavior = current()
+check(behavior["baseline_open"] and behavior["phase_seq"] == 3 and len(behavior["phases"]) == 3,
+      "una sola fase activa: A2")
+status, body = call("POST", "/app/tasks", {"behavior_id": maladaptive_id, "title": "Respiración guiada",
+                                           "task_type": "EJERCICIO_PRACTICA", "metric_unit": "SOLO_COMPLETADO"}, T)
+check(status == 409, "en A2 vuelve a regir: sin tratamiento durante la línea base")
 
 print("\n6. Permisos por rol")
 status, body = call("POST", "/app/behaviors", {

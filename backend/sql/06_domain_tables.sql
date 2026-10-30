@@ -153,6 +153,116 @@ create table if not exists usb_widget_entries (
 );
 
 -- --------------------------------------------------------------------------
+-- Fases del diseño de caso único (A-B, A-B-A-B…)
+-- Cada conducta está en UNA fase a la vez: phase_seq 1 = A1 (línea base), 2 = B1
+-- (intervención), 3 = A2, 4 = B2… (impar = línea base, par = intervención). Solo avanza
+-- hacia adelante y la decide el terapeuta. Cada tarea y cada registro pertenecen a la fase
+-- en que se crearon; al terminar una fase sus tareas se retiran (retired_at).
+-- study_code agrupa conductas de varios pacientes de un mismo estudio (análisis de grupo);
+-- es null en los casos clínicos individuales.
+-- --------------------------------------------------------------------------
+declare
+  procedure ddl_if(p_condition_sql varchar2, p_ddl varchar2) is
+    l_count number;
+  begin
+    execute immediate p_condition_sql into l_count;
+    if l_count > 0 then
+      execute immediate p_ddl;
+    end if;
+  end ddl_if;
+begin
+  ddl_if(q'[select 1 - count(*) from user_tab_columns where table_name = 'USB_BEHAVIORS' and column_name = 'PHASE_SEQ']',
+         'alter table usb_behaviors add (phase_seq number(3) default 1 not null)');
+  ddl_if(q'[select 1 - count(*) from user_tab_columns where table_name = 'USB_BEHAVIORS' and column_name = 'STUDY_CODE']',
+         'alter table usb_behaviors add (study_code varchar2(40))');
+  ddl_if(q'[select 1 - count(*) from user_tab_columns where table_name = 'USB_TASKS' and column_name = 'PHASE_SEQ']',
+         'alter table usb_tasks add (phase_seq number(3))');
+  ddl_if(q'[select 1 - count(*) from user_tab_columns where table_name = 'USB_TASKS' and column_name = 'RETIRED_AT']',
+         'alter table usb_tasks add (retired_at timestamp with time zone)');
+  ddl_if(q'[select 1 - count(*) from user_tab_columns where table_name = 'USB_TASK_ENTRIES' and column_name = 'PHASE_SEQ']',
+         'alter table usb_task_entries add (phase_seq number(3))');
+end;
+/
+
+create table if not exists usb_behavior_phases (
+  behavior_id number    not null references usb_behaviors on delete cascade,
+  phase_seq   number(3) not null,
+  phase       varchar2(20) not null,
+  started_at  timestamp with time zone default systimestamp not null,
+  ended_at    timestamp with time zone,
+  started_by  number references usb_users on delete set null,
+  constraint usb_behavior_phases_pk primary key (behavior_id, phase_seq),
+  constraint usb_behavior_phases_ck check (
+    phase = case when mod(phase_seq, 2) = 1 then 'LINEA_BASE' else 'INTERVENCION' end)
+);
+
+-- Parámetros del flujo clínico, editables por quien tenga settings.clinical.
+create table if not exists usb_app_settings (
+  setting_key varchar2(64)  primary key,
+  value       varchar2(400) not null,
+  description varchar2(400),
+  updated_by  number references usb_users on delete set null,
+  updated_at  timestamp with time zone default systimestamp not null
+);
+merge into usb_app_settings s
+using (select 'MIN_PHASE_OBSERVATIONS' k, '3' v,
+              'Días con registro que necesita cada dimensión medida para terminar una fase (mínimo 3).' d from dual) x
+   on (s.setting_key = x.k)
+ when not matched then insert (setting_key, value, description) values (x.k, x.v, x.d);
+
+-- Completa las fases de datos anteriores a este diseño (línea base = A1, intervención = B1)
+-- y deja todo coherente. Idempotente: la semilla también lo llama al final.
+create or replace procedure usb_sync_phases authid definer as
+begin
+  update usb_behaviors set phase_seq = phase_seq + 1
+   where not baseline_open and mod(phase_seq, 2) = 1;
+  update usb_tasks set phase_seq = case when phase = 'LINEA_BASE' then 1 else 2 end
+   where phase_seq is null;
+  update usb_task_entries e
+     set phase_seq = (select t.phase_seq from usb_tasks t where t.task_id = e.task_id)
+   where phase_seq is null;
+  update usb_task_entries set is_baseline = (phase = 'LINEA_BASE')
+   where is_baseline != (phase = 'LINEA_BASE');
+
+  -- A1 empezó con el primer registro de la conducta (o al crearla, si aún no tiene).
+  insert into usb_behavior_phases (behavior_id, phase_seq, phase, started_at, ended_at)
+  select b.behavior_id, 1, 'LINEA_BASE',
+         least(b.created_at, coalesce(b.baseline_closed_at, b.created_at),
+               coalesce((select from_tz(cast(min(e.entry_date) as timestamp), 'America/Bogota')
+                           from usb_task_entries e join usb_tasks t on t.task_id = e.task_id
+                          where t.behavior_id = b.behavior_id), b.created_at)),
+         case when b.phase_seq > 1 then coalesce(b.baseline_closed_at, systimestamp) end
+    from usb_behaviors b
+   where not exists (select 1 from usb_behavior_phases p where p.behavior_id = b.behavior_id);
+  insert into usb_behavior_phases (behavior_id, phase_seq, phase, started_at)
+  select b.behavior_id, 2, 'INTERVENCION', coalesce(b.baseline_closed_at, b.created_at)
+    from usb_behaviors b
+   where b.phase_seq = 2
+     and not exists (select 1 from usb_behavior_phases p where p.behavior_id = b.behavior_id and p.phase_seq = 2);
+
+  -- Una fase nunca termina antes de empezar (datos migrados con la fecha de creación).
+  update usb_behavior_phases p
+     set started_at = least(p.ended_at,
+           coalesce((select from_tz(cast(min(e.entry_date) as timestamp), 'America/Bogota')
+                       from usb_task_entries e join usb_tasks t on t.task_id = e.task_id
+                      where t.behavior_id = p.behavior_id and e.phase_seq = p.phase_seq), p.ended_at))
+   where p.ended_at < p.started_at;
+
+  -- Las tareas de fases ya terminadas no se pueden seguir registrando.
+  update usb_tasks t
+     set retired_at = coalesce((select p.ended_at from usb_behavior_phases p
+                                 where p.behavior_id = t.behavior_id and p.phase_seq = t.phase_seq), systimestamp)
+   where t.retired_at is null
+     and t.phase_seq < (select b.phase_seq from usb_behaviors b where b.behavior_id = t.behavior_id);
+end usb_sync_phases;
+/
+
+begin
+  usb_sync_phases;
+end;
+/
+
+-- --------------------------------------------------------------------------
 -- Catálogos semilla
 -- --------------------------------------------------------------------------
 merge into usb_behavioral_functions f

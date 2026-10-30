@@ -50,6 +50,7 @@ private fun BehaviorDto.toBehavior(widgets: List<WidgetConfig>): Behavior {
             id = it.id, taskId = it.taskId, behaviorId = id, date = LocalDate.parse(it.date),
             value = it.value, note = it.note.cleanRemoteText(), phase = Phase.LINEA_BASE,
             dimension = enumOr(it.dimension, Dimension.FRECUENCIA), observationMinutes = it.observationMinutes,
+            phaseSeq = it.phaseSeq,
         )
     }
     return Behavior(
@@ -65,6 +66,8 @@ private fun BehaviorDto.toBehavior(widgets: List<WidgetConfig>): Behavior {
         tasks = tasks.map { it.toTask(widgets) },
         baselineDimensions = baselineDimensions.map { enumOr(it, Dimension.FRECUENCIA) }
             .ifEmpty { listOf(Dimension.FRECUENCIA) },
+        phaseSeq = phaseSeq,
+        phases = phases.map { PhaseSpan(it.seq, it.startedOn, it.endedOn) },
     ).also { it.baselineClosedOn = baselineClosedOn }
 }
 
@@ -86,11 +89,15 @@ private fun TaskDto.toTask(widgets: List<WidgetConfig>): TrackTask {
         phase = enumOr(phase, Phase.LINEA_BASE),
         status = enumOr(status, TaskStatus.PENDIENTE),
         entries = entries.map {
-            TaskEntry(LocalDate.parse(it.date), it.value, it.note.cleanRemoteText(), enumOr(it.phase, Phase.INTERVENCION), it.observationMinutes)
+            val entryPhase = enumOr(it.phase, Phase.INTERVENCION)
+            TaskEntry(LocalDate.parse(it.date), it.value, it.note.cleanRemoteText(), entryPhase, it.observationMinutes,
+                it.phaseSeq ?: phaseSeq)
         },
         widgetConfig = widget,
         therapeuticGoal = therapeuticGoal?.cleanRemoteText(),
         widgetEntries = if (widget == null) emptyList() else widgetEntries.map { it.toWidgetEntry(id, widget) },
+        phaseSeq = phaseSeq,
+        retired = retired,
     )
 }
 

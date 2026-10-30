@@ -71,6 +71,13 @@ data class BootstrapDto(
     val user: BootstrapUser,
     val patients: List<PatientDto> = emptyList(),
     val catalogs: CatalogsDto = CatalogsDto(),
+    val settings: ClinicalSettingsDto = ClinicalSettingsDto(),
+)
+
+@Serializable
+data class ClinicalSettingsDto(
+    /** Días con registro que necesita cada dimensión medida para terminar una fase. */
+    @SerialName("min_phase_observations") val minPhaseObservations: Int = 3,
 )
 
 @Serializable
@@ -145,6 +152,17 @@ data class BehaviorDto(
     @SerialName("baseline_dimensions") val baselineDimensions: List<String> = emptyList(),
     @SerialName("baseline_entries") val baselineEntries: List<BaselineEntryDto> = emptyList(),
     val tasks: List<TaskDto> = emptyList(),
+    /** Fase actual: 1 = A1, 2 = B1, 3 = A2… (impar = línea base, par = intervención). */
+    @SerialName("phase_seq") val phaseSeq: Int = 1,
+    val phases: List<PhaseDto> = emptyList(),
+)
+
+@Serializable
+data class PhaseDto(
+    val seq: Int,
+    val phase: String,
+    @SerialName("started_on") val startedOn: String? = null,
+    @SerialName("ended_on") val endedOn: String? = null,
 )
 
 @Serializable
@@ -155,6 +173,7 @@ data class BaselineEntryDto(
     val value: Double,
     val note: String = "",
     val dimension: String,
+    @SerialName("phase_seq") val phaseSeq: Int = 1,
     @SerialName("observation_minutes") val observationMinutes: Int? = null,
 )
 
@@ -175,6 +194,9 @@ data class TaskDto(
     val frequency: String? = null,
     @SerialName("reminder_active") val reminderActive: Boolean = false,
     val phase: String,
+    @SerialName("phase_seq") val phaseSeq: Int = 1,
+    /** La fase de la tarea ya terminó: queda como historial y no admite registros. */
+    val retired: Boolean = false,
     val status: String = "PENDIENTE",
     val entries: List<EntryDto> = emptyList(),
     @SerialName("widget_entries") val widgetEntries: List<WidgetEntryDto> = emptyList(),
@@ -186,6 +208,7 @@ data class EntryDto(
     val value: Double,
     val note: String = "",
     val phase: String,
+    @SerialName("phase_seq") val phaseSeq: Int? = null,
     @SerialName("observation_minutes") val observationMinutes: Int? = null,
 )
 
@@ -294,9 +317,10 @@ data class AnalyticsDatasetDto(
     val source: String = "",
     @SerialName("generated_at") val generatedAt: String = "",
     val privacy: AnalyticsPrivacyDto = AnalyticsPrivacyDto(),
+    /** Casos individuales: A1 contra B1 de un solo paciente. */
     val series: List<AnalyticsSeriesDto> = emptyList(),
-    @SerialName("program_groups") val programGroups: List<AnalyticsProgramGroupDto> = emptyList(),
-    @SerialName("age_groups") val ageGroups: List<AnalyticsProgramGroupDto> = emptyList(),
+    /** Estudios de grupo: varios participantes con la misma conducta (study_code). */
+    val studies: List<AnalyticsStudyDto> = emptyList(),
 )
 
 @Serializable
@@ -321,18 +345,41 @@ data class AnalyticsSeriesDto(
 data class AnalyticsPointDto(
     val session: Int,
     val value: Double,
-    /** Día relativo al inicio de la serie; nunca es una fecha real. */
+    /** Día relativo al inicio de la serie (1 = primer día observado). */
     val day: Int = session,
-    /** Fecha del registro diario, necesaria para construir la serie cronológica autorizada. */
+    /** Fecha del día en los casos individuales (hace falta para ordenarlos); null en los estudios. */
     val date: String? = null,
 )
 
 @Serializable
-data class AnalyticsProgramGroupDto(
-    val program: String,
+data class AnalyticsStudyDto(
+    val id: String,
+    val code: String,
+    val behavior: String,
     val dimension: String,
     val unit: String,
-    @SerialName("participants") val participants: Int,
+    @SerialName("expected_direction") val expectedDirection: String = "DECREASE",
+    /** Una fila por participante, sin identificador: su media diaria en A1 y en B1. */
+    val participants: List<AnalyticsParticipantDto> = emptyList(),
+    /** Promedio entre participantes del total diario, por día relativo. */
+    val baseline: List<AnalyticsPointDto> = emptyList(),
+    val intervention: List<AnalyticsPointDto> = emptyList(),
+    @SerialName("program_groups") val programGroups: List<AnalyticsGroupDto> = emptyList(),
+    @SerialName("age_groups") val ageGroups: List<AnalyticsGroupDto> = emptyList(),
+)
+
+@Serializable
+data class AnalyticsParticipantDto(
     @SerialName("baseline_mean") val baselineMean: Double,
     @SerialName("intervention_mean") val interventionMean: Double,
+)
+
+/** Grupo descriptivo (programa o rango de edad); el servidor solo entrega grupos con n ≥ 3. */
+@Serializable
+data class AnalyticsGroupDto(
+    val group: String,
+    val participants: Int,
+    @SerialName("baseline_mean") val baselineMean: Double,
+    @SerialName("intervention_mean") val interventionMean: Double,
+    val sort: Int = 0,
 )
