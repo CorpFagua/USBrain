@@ -75,6 +75,10 @@ create or replace package body usb_admin as
     l_user usb_users%rowtype;
   begin
     select * into l_user from usb_users where user_id = p_user_id for update;
+    -- Los participantes sintéticos alimentan el análisis: no se habilitan ni se les da acceso.
+    if l_user.is_synthetic then
+      fail(usb_auth.e_conflict, 'synthetic_user', 'Es un participante sintético del estudio: no se puede modificar.');
+    end if;
     return l_user;
   exception
     when no_data_found then
@@ -199,6 +203,7 @@ create or replace package body usb_admin as
                  'is_patient' value case when p.user_id is not null then 'true' else 'false' end format json,
                  'therapist_id' value to_char(p.therapist_id),
                  'therapist_name' value t.full_name,
+                 'synthetic' value u.is_synthetic,
                  'permissions' value (select json_arrayagg(ep.permission_id order by ep.permission_id returning json)
                                         from usb_effective_permissions ep where ep.user_id = u.user_id),
                  'overrides' value (
@@ -220,8 +225,7 @@ create or replace package body usb_admin as
           from usb_users u
           join usb_roles r on r.role_id = u.role
           left join usb_patient_profiles p on p.user_id = u.user_id
-          left join usb_users t on t.user_id = p.therapist_id
-         where not u.is_synthetic) end,
+          left join usb_users t on t.user_id = p.therapist_id) end,
       'roles' value (
         select json_arrayagg(json_object(
                  'id' value r.role_id,

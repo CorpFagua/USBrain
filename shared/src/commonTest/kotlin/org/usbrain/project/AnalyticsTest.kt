@@ -64,6 +64,17 @@ class AnalyticsTest {
     }
 
     @Test
+    fun quantileAndConfidenceIntervalMatchTables() {
+        assertEquals(2.776, studentTQuantile(0.975, 4.0), 0.001)
+        assertEquals(-2.132, studentTQuantile(0.05, 4.0), 0.001)
+        val result = assertNotNull(welchTest(listOf(6.0, 5.0, 7.0), listOf(4.0, 6.0, 5.0), "DECREASE"))
+        // Diferencia −1 con EE 0,816 y t(4) = 2,776: el intervalo incluye 0, coherente con p = 0,14.
+        assertEquals(-1.0 - 2.776 * result.standardError, result.ciLow, 0.01)
+        assertTrue(result.ciLow < 0 && result.ciHigh > 0)
+        assertEquals(-2.132, result.criticalT, 0.001)
+    }
+
+    @Test
     fun needsAtLeastThreeValuesPerSide() {
         assertNull(welchTest(listOf(1.0, 2.0), listOf(1.0, 2.0, 3.0), "DECREASE"))
         assertNull(pairedTest(listOf(1.0 to 0.0, 2.0 to 1.0), "DECREASE"))

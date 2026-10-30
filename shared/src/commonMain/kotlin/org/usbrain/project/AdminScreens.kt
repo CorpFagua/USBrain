@@ -182,10 +182,32 @@ private fun eventLabel(type: String): String = when (type) {
 
 /* ----------------------------- usuarios ----------------------------- */
 
+private enum class UserStatusFilter(val label: String) { ACTIVE("Activos"), INACTIVE("Inactivos"), ALL("Todos") }
+
+private const val USERS_PAGE = 50
+
+/** Quita tildes y mayúsculas para que "patino" encuentre a "Patiño". */
+private fun searchable(text: String): String = text.lowercase()
+    .replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n')
+
 @Composable
 internal fun AdminUsersScreen(state: PrototypeState) {
     LaunchedEffect(Unit) { state.loadAdmin() }
     val users = state.adminData?.users.orEmpty()
+    var query by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf(UserStatusFilter.ACTIVE) }
+    val words = searchable(query).split(' ').filter { it.isNotBlank() }
+    val matching = users.filter { user ->
+        val byStatus = when (filter) {
+            UserStatusFilter.ACTIVE -> user.status == "ACTIVE"
+            UserStatusFilter.INACTIVE -> user.status != "ACTIVE"
+            UserStatusFilter.ALL -> true
+        }
+        val text = searchable("${user.fullName} ${user.email} ${user.roleName} ${user.role}")
+        byStatus && words.all { it in text }
+    }
+    // De a 50: con los participantes sintéticos la lista pasa de 200 y se dibujaría lenta.
+    var shown by remember(query, filter) { mutableStateOf(USERS_PAGE) }
     ScreenScaffold {
         Text("Usuarios", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(
@@ -194,9 +216,40 @@ internal fun AdminUsersScreen(state: PrototypeState) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        OutlinedTextField(
+            query, { query = it.take(80) }, Modifier.fillMaxWidth(),
+            label = { Text("Buscar por nombre, correo o rol") }, singleLine = true,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            UserStatusFilter.entries.forEach { option ->
+                val count = users.count {
+                    when (option) {
+                        UserStatusFilter.ACTIVE -> it.status == "ACTIVE"
+                        UserStatusFilter.INACTIVE -> it.status != "ACTIVE"
+                        UserStatusFilter.ALL -> true
+                    }
+                }
+                TabChip(filter == option, { filter = option }, "${option.label} ($count)")
+            }
+        }
         AdminMessages(state)
         if (state.adminData == null && state.adminError == null) Text("Cargando…", style = MaterialTheme.typography.bodySmall)
-        users.forEach { user -> UserRow(user, enabled = state.can("users.manage")) { state.openUser(user.id) } }
+        if (state.adminData != null) {
+            Text(
+                if (matching.isEmpty()) "Ningún usuario coincide con la búsqueda."
+                else "Mostrando ${minOf(shown, matching.size)} de ${matching.size}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        matching.take(shown).forEach { user ->
+            UserRow(user, enabled = state.can("users.manage") && !user.synthetic) { state.openUser(user.id) }
+        }
+        if (matching.size > shown) {
+            OutlinedButton(onClick = { shown += USERS_PAGE }, Modifier.fillMaxWidth()) {
+                Text("Mostrar ${minOf(USERS_PAGE, matching.size - shown)} más")
+            }
+        }
         Spacer(Modifier.height(72.dp))
     }
 }
@@ -219,7 +272,11 @@ private fun UserRow(user: AdminUserDto, enabled: Boolean, onClick: () -> Unit) {
                     user.locked -> Pill("Bloqueado", MaterialTheme.colorScheme.error)
                     else -> Pill("Activo", s.success)
                 }
-                Pill(if (user.mfaEnabled) "2FA activo" else "Sin 2FA", MaterialTheme.colorScheme.onSurfaceVariant)
+                if (user.synthetic) {
+                    Pill("Participante sintético · solo lectura", Brand.Orange)
+                } else {
+                    Pill(if (user.mfaEnabled) "2FA activo" else "Sin 2FA", MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 user.therapistName?.let { Pill("Terapeuta: $it", MaterialTheme.colorScheme.onSurfaceVariant) }
                 user.overrides.count { it.active }.takeIf { it > 0 }?.let {
                     Pill(if (it == 1) "1 permiso individual" else "$it permisos individuales", Brand.Orange)

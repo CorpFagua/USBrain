@@ -107,6 +107,23 @@ declare
     values (p_task, p_date, p_value, p_note, p_phase, p_minutes, p_phase = 'LINEA_BASE', l_ana);
   end entry;
 
+  -- Ruido uniforme 0..1 determinista (un hash entero): datos variados como los reales, pero
+  -- idénticos en cada semilla para que los resultados del panel se puedan citar.
+  function noise(p_a number, p_b number, p_c number) return number is
+    c_m constant number := 2147483647;
+    l_h number := mod(p_a * 73856093 + p_b * 19349663 + p_c * 83492791, c_m);
+  begin
+    l_h := mod(l_h * 48271, c_m);
+    l_h := mod(l_h * 48271, c_m);
+    return l_h / c_m;
+  end noise;
+
+  -- Episodios "en clase": entre semana hay clases, el fin de semana casi no (lunes = 0).
+  function weekday_factor(p_date date) return number is
+  begin
+    return case when mod(p_date - date '2026-08-31', 7) >= 5 then 0.55 else 1.15 end;
+  end weekday_factor;
+
   -- Deja una conducta en B1 con A1 del p_a_start al día anterior a p_b_start: fases, tareas
   -- retiradas y número de fase de cada registro, como si el terapeuta hubiera cambiado de fase.
   procedure set_ab_phases(p_behavior number, p_a_start date, p_b_start date) is
@@ -264,11 +281,17 @@ begin
   -- Sobran registros autónomos que medían otra dimensión sin línea base o duplicaban el principal.
   delete from usb_tasks
    where behavior_id = l_b and task_type = 'REGISTRO_AUTONOMO' and task_id not in (l_t_base, l_t_treatment);
+  -- Nivel propio de 6,4 episodios por día de clase; el tratamiento lo reduce hasta un 55 % con una
+  -- curva de aprendizaje (mejora rápido y se estabiliza), con repunte en parciales (12–16 oct).
   for d in 0..29 loop
-    entry(l_t_base, date '2026-09-01' + d, 5 + mod(d * 7 + 2, 4),
+    entry(l_t_base, date '2026-09-01' + d,
+          greatest(0, floor(6.4 * weekday_factor(date '2026-09-01' + d)
+                            + (noise(900, d, 11) + noise(900, d, 13) - 1) * 2.2 + 0.5)),
           'Dato ficticio: total diario de episodios sin tratamiento.', 'LINEA_BASE', 60);
     entry(l_t_treatment, date '2026-10-01' + d,
-          greatest(0, round(4.6 - d * 0.09 + (mod(d * 3, 4) - 1.5) * 0.8)),
+          greatest(0, floor(6.4 * (1 - 0.55 * (1 - exp(-d / 7))) * weekday_factor(date '2026-10-01' + d)
+                            * case when d between 11 and 15 then 1.25 else 1 end
+                            + (noise(900, d, 17) + noise(900, d, 19) - 1) * 1.8 + 0.5)),
           'Dato ficticio: total diario de episodios durante tratamiento.', 'INTERVENCION', 60);
   end loop;
   -- Las mediciones configurables de la intervención no pueden ser anteriores al tratamiento.
@@ -417,6 +440,25 @@ declare
   l_program  varchar2(200);
   l_extra    number;
   l_value    number;
+  l_level    number;
+  l_response number;
+
+  -- Ruido uniforme 0..1 determinista (un hash entero): datos variados como los reales, pero
+  -- idénticos en cada semilla para que los resultados del panel se puedan citar.
+  function noise(p_a number, p_b number, p_c number) return number is
+    c_m constant number := 2147483647;
+    l_h number := mod(p_a * 73856093 + p_b * 19349663 + p_c * 83492791, c_m);
+  begin
+    l_h := mod(l_h * 48271, c_m);
+    l_h := mod(l_h * 48271, c_m);
+    return l_h / c_m;
+  end noise;
+
+  -- Episodios "en clase": entre semana hay clases, el fin de semana casi no (lunes = 0).
+  function weekday_factor(p_date date) return number is
+  begin
+    return case when mod(p_date - date '2026-08-31', 7) >= 5 then 0.55 else 1.15 end;
+  end weekday_factor;
 
   -- Cuenta sintética sin acceso (hash vacío: ninguna contraseña coincide).
   function synthetic_user(p_email varchar2, p_name varchar2, p_role varchar2) return number is
@@ -505,13 +547,22 @@ begin
     values (l_behavior, 'Registro diario de ansiedad (B1)', 'Registrar el total diario de episodios durante el tratamiento.',
             'REGISTRO_AUTONOMO', 'FRECUENCIA', 'INTERVENCION', 2, true, 'Diaria', l_therapist)
     returning task_id into l_treat;
+    -- Cada participante tiene su nivel (4 a 8 episodios por día de clase) y su respuesta al
+    -- tratamiento (30 a 75 % menos al final); uno de cada diez no responde. Hay días que afectan
+    -- a todo el grupo (entregas, parciales del 12 al 16 de octubre) y ruido propio de cada día.
+    l_level := 4 + 4 * noise(i, 1, 7) + l_extra;
+    l_response := case when mod(i, 10) = 0 then 0 else 0.30 + 0.45 * noise(i, 2, 7) end;
     for d in 0..29 loop
+      l_value := greatest(0, floor(l_level * weekday_factor(date '2026-09-01' + d)
+                                   * (1 + 0.30 * (noise(0, d, 23) - 0.5))
+                                   + (noise(i, d, 11) + noise(i, d, 13) - 1) * 2.2 + 0.5));
       insert into usb_task_entries (task_id, entry_date, value, note, phase, phase_seq, observation_minutes, is_baseline, recorded_by)
-      values (l_base, date '2026-09-01' + d, 4 + mod(i * 7 + d * 3, 6) + l_extra,
-              'Dato sintético de estudio.', 'LINEA_BASE', 1, 60, true, l_patient);
-      -- Uno de cada diez participantes no responde al tratamiento: el grupo no es perfecto.
-      l_value := case when mod(i, 10) = 0 then 4 + mod(i * 5 + d * 2, 6) + l_extra
-                      else greatest(0, 3 + mod(i * 5 + d * 2, 4) - floor(d / 10) - mod(i, 3)) end;
+      values (l_base, date '2026-09-01' + d, l_value, 'Dato sintético de estudio.', 'LINEA_BASE', 1, 60, true, l_patient);
+      l_value := greatest(0, floor(l_level * (1 - l_response * (1 - exp(-d / 7)))
+                                   * weekday_factor(date '2026-10-01' + d)
+                                   * case when d between 11 and 15 then 1.25 else 1 end
+                                   * (1 + 0.30 * (noise(0, d + 30, 23) - 0.5))
+                                   + (noise(i, d, 17) + noise(i, d, 19) - 1) * 1.8 + 0.5));
       insert into usb_task_entries (task_id, entry_date, value, note, phase, phase_seq, observation_minutes, is_baseline, recorded_by)
       values (l_treat, date '2026-10-01' + d, l_value, 'Dato sintético de estudio.', 'INTERVENCION', 2, 60, false, l_patient);
     end loop;

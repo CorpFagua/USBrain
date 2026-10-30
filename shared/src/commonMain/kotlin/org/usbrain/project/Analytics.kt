@@ -33,6 +33,13 @@ data class HypothesisResult(
     /** d de Cohen (Welch, con desviación combinada) o dz (pareada, con la desviación de las diferencias). */
     val effectSize: Double,
     val supportsExpectedDirection: Boolean,
+    /** Denominador del estadístico: cuánto variaría la diferencia de medias solo por azar. */
+    val standardError: Double,
+    /** Intervalo de confianza del 95 % para la diferencia (B1 − A1). */
+    val ciLow: Double,
+    val ciHigh: Double,
+    /** Valor de t a partir del cual se rechaza H₀ con α = 0,05 (unilateral, en la dirección esperada). */
+    val criticalT: Double,
 )
 
 /**
@@ -59,6 +66,7 @@ fun welchTest(baseline: List<Double>, intervention: List<Double>, expectedDirect
         (seA + seB).pow(2) / (seA.pow(2) / (nA - 1) + seB.pow(2) / (nB - 1))
     } else (nA + nB - 2).toDouble()
     val pooledSd = sqrt(((nA - 1) * varA + (nB - 1) * varB) / (nA + nB - 2))
+    val margin = studentTQuantile(0.975, df) * standardError
     return HypothesisResult(
         method = HypothesisMethod.WELCH,
         baselineN = nA,
@@ -72,6 +80,10 @@ fun welchTest(baseline: List<Double>, intervention: List<Double>, expectedDirect
         pValue = oneSidedP(statistic, df, expectedDirection, standardError > 0.0, meanB - meanA),
         effectSize = if (pooledSd > 0.0) (meanB - meanA) / pooledSd else 0.0,
         supportsExpectedDirection = matchesDirection(meanB - meanA, expectedDirection),
+        standardError = standardError,
+        ciLow = meanB - meanA - margin,
+        ciHigh = meanB - meanA + margin,
+        criticalT = criticalT(df, expectedDirection),
     )
 }
 
@@ -93,6 +105,7 @@ fun pairedTest(pairs: List<Pair<Double, Double>>, expectedDirection: String): Hy
     val df = (n - 1).toDouble()
     val meanA = pairs.map { it.first }.average()
     val meanB = pairs.map { it.second }.average()
+    val margin = studentTQuantile(0.975, df) * standardError
     return HypothesisResult(
         method = HypothesisMethod.PAIRED,
         baselineN = n,
@@ -106,8 +119,23 @@ fun pairedTest(pairs: List<Pair<Double, Double>>, expectedDirection: String): Hy
         pValue = oneSidedP(statistic, df, expectedDirection, standardError > 0.0, meanDiff),
         effectSize = if (sdDiff > 0.0) meanDiff / sdDiff else 0.0,
         supportsExpectedDirection = matchesDirection(meanDiff, expectedDirection),
+        standardError = standardError,
+        ciLow = meanDiff - margin,
+        ciHigh = meanDiff + margin,
+        criticalT = criticalT(df, expectedDirection),
     )
 }
+
+/** Media e intervalo del 95 % de una lista de valores (para dibujar cada fase). */
+fun meanWithCi(values: List<Double>): Triple<Double, Double, Double>? {
+    if (values.size < 2) return null
+    val mean = values.average()
+    val margin = studentTQuantile(0.975, (values.size - 1).toDouble()) * sqrt(sampleVariance(values) / values.size)
+    return Triple(mean, mean - margin, mean + margin)
+}
+
+private fun criticalT(df: Double, expectedDirection: String): Double =
+    if (expectedDirection == "INCREASE") studentTQuantile(0.95, df) else studentTQuantile(0.05, df)
 
 private fun percentChange(meanA: Double, meanB: Double): Double? =
     meanA.takeIf { it != 0.0 }?.let { (meanB - meanA) / abs(it) * 100.0 }
@@ -137,6 +165,21 @@ internal fun studentTCdf(t: Double, df: Double): Double {
     val x = df / (df + t * t)
     val tail = 0.5 * regularizedIncompleteBeta(x, df / 2.0, 0.5)
     return if (t >= 0.0) 1.0 - tail else tail
+}
+
+/** Densidad de la t de Student: la "campana" de valores de t que daría el azar si H₀ fuera cierta. */
+fun studentTPdf(t: Double, df: Double): Double =
+    exp(lnGamma((df + 1) / 2) - lnGamma(df / 2) - 0.5 * ln(df * kotlin.math.PI) - (df + 1) / 2 * ln(1 + t * t / df))
+
+/** Valor de t con probabilidad acumulada p (inversa de la CDF, por bisección). */
+fun studentTQuantile(p: Double, df: Double): Double {
+    var low = -60.0
+    var high = 60.0
+    repeat(100) {
+        val mid = (low + high) / 2
+        if (studentTCdf(mid, df) < p) low = mid else high = mid
+    }
+    return (low + high) / 2
 }
 
 /** I_x(a, b) por fracción continua (Numerical Recipes, «betai»). */

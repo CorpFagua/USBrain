@@ -85,7 +85,7 @@ Cada conducta está en **una sola fase a la vez** y solo avanza hacia adelante:
   quedan fijas. El terapeuta crea el registro diario de cada fase nueva cuando lo decide (no es
   automático).
 - La gráfica del terapeuta muestra una sección por fase y el promedio de cada una
-  (p. ej. *A1 6,5 → B1 3,3 → A2 5,8*).
+  (p. ej. *A1 6,3 → B1 4,0 → A2 5,8*).
 
 ### Panel estadístico del superadministrador
 
@@ -115,11 +115,15 @@ demuestra causalidad ni reemplaza el análisis visual y clínico.
 
 Datos de prueba (`install.sh --seed`), todos sintéticos y deterministas:
 
-- **Ana Torres**: "Episodios de ansiedad en clase", A1 1–30 sep (media 6,5/día) y B1 1–30 oct (3,3/día).
+- **Ana Torres**: "Episodios de ansiedad en clase", A1 1–30 sep (media 6,3/día) y B1 1–30 oct (4,0/día):
+  menos episodios los fines de semana (sin clases), curva de aprendizaje y repunte en parciales (12–16 oct).
 - **Laura Mendoza**: minutos para dormir, A1 1–14 jul estable (≈48 min) y B1 desde el 15 jul, bajando.
 - **Estudio `ANSIEDAD_COHORTE_2026`**: 200 participantes sintéticos (cuentas deshabilitadas, sin
   contraseña, fuera de la app clínica y de la lista de usuarios), asignados a "Terapeuta de cohorte
-  (demo)", 30 días en A1 y 30 en B1; 1 de cada 10 no responde al tratamiento.
+  (demo)", 30 días en A1 y 30 en B1. Cada participante tiene su nivel (4 a 8 episodios por día de
+  clase) y su respuesta (30–75 % menos al final); 1 de cada 10 no responde. Hay días que afectan a
+  todo el grupo y ruido diario propio, generado con un hash entero: variado como un dato real, pero
+  idéntico en cada semilla.
 
 El cálculo vive en Kotlin compartido (`Analytics.kt`) para dar el mismo resultado en web y Android.
 

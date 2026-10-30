@@ -261,6 +261,8 @@ data class AdminUserDto(
     @SerialName("is_patient") val isPatient: Boolean = false,
     @SerialName("therapist_id") val therapistId: String? = null,
     @SerialName("therapist_name") val therapistName: String? = null,
+    // Participante sintético de un estudio: solo lectura, sin acceso a la app.
+    val synthetic: Boolean = false,
     // Permisos efectivos (rol + excepciones vigentes) y las excepciones individuales.
     val permissions: List<String> = emptyList(),
     val overrides: List<UserOverrideDto> = emptyList(),

@@ -169,7 +169,11 @@ private fun AnalyticsSeriesPanel(series: AnalyticsSeriesDto) {
         }
     }
 
-    HypothesisCard(result, series.unit, series.expectedDirection)
+    HypothesisCard(
+        result, series.expectedDirection,
+        series.baseline.sortedBy { it.session }.map { it.value },
+        series.intervention.sortedBy { it.session }.map { it.value },
+    )
 }
 
 /** Estudio de grupo: promedio diario de los participantes y prueba pareada sobre sus cambios. */
@@ -206,7 +210,11 @@ private fun StudyPanel(study: AnalyticsStudyDto) {
             }
         }
     }
-    HypothesisCard(result, study.unit, study.expectedDirection)
+    HypothesisCard(
+        result, study.expectedDirection,
+        study.baseline.sortedBy { it.session }.map { it.value },
+        study.intervention.sortedBy { it.session }.map { it.value },
+    )
     GroupComparisonCard(
         "Comparación por programa académico",
         study.programGroups,
@@ -220,11 +228,16 @@ private fun StudyPanel(study: AnalyticsStudyDto) {
 }
 
 /**
- * Hipótesis, resultado y advertencias. La misma tarjeta sirve para un caso (t de Welch sobre
- * los días de A1 y B1) y para un estudio (t pareada sobre el cambio de cada participante).
+ * Hipótesis, resultado y A1 frente a B1 superpuestas por día de muestra. Sirve para un caso
+ * (t de Welch sobre los días) y para un estudio (t pareada; las barras son el promedio del grupo).
  */
 @Composable
-private fun HypothesisCard(result: HypothesisResult?, unit: String, expectedDirection: String) {
+private fun HypothesisCard(
+    result: HypothesisResult?,
+    expectedDirection: String,
+    baseline: List<Double>,
+    intervention: List<Double>,
+) {
     val decrease = expectedDirection != "INCREASE"
     val isStudy = result?.method == HypothesisMethod.PAIRED
     ElevatedCard(Modifier.fillMaxWidth()) {
@@ -254,7 +267,6 @@ private fun HypothesisCard(result: HypothesisResult?, unit: String, expectedDire
                     color = MaterialTheme.colorScheme.error,
                 )
             } else {
-                Text("Método: ${result.method.label} · unilateral", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     StatTile(analyticsFmt(result.baselineMean), "media A1", LocalUsBrainSemantic.current.baseline)
                     StatTile(analyticsFmt(result.interventionMean), "media B1", LocalUsBrainSemantic.current.intervention)
@@ -267,28 +279,66 @@ private fun HypothesisCard(result: HypothesisResult?, unit: String, expectedDire
                     fontWeight = FontWeight.SemiBold,
                     color = if (significant) LocalUsBrainSemantic.current.success else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Text(
-                    (if (isStudy) "n = ${result.baselineN} participantes" else "n = ${result.baselineN} días en A1 y ${result.interventionN} en B1") +
-                        " · t(${analyticsFmt(result.degreesOfFreedom)}) = ${analyticsFmt(result.statistic).replace('.', ',')}" +
-                        " · cambio medio ${signed(result.difference)} $unit" +
-                        " · cambio relativo ${result.percentChange?.let { signed(it) + "%" } ?: "no calculable"}" +
-                        " · tamaño del efecto ${if (isStudy) "dz" else "d"} = ${analyticsFmt(result.effectSize).replace('.', ',')}.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
                 if (!result.supportsExpectedDirection) {
                     Text("La dirección observada no coincide con la esperada para esta conducta.", style = MaterialTheme.typography.bodySmall)
                 }
+                OverlayBarsChart(baseline, intervention)
             }
-            Text(
-                if (isStudy) {
-                    "Advertencia metodológica: estudio pre-post sin grupo control. El cambio puede deberse a otros factores (paso del tiempo, regresión a la media); no demuestra causalidad."
-                } else {
-                    "Advertencia metodológica: los días de una misma persona se parecen entre sí (autocorrelación), lo que puede exagerar la significancia. No demuestra causalidad ni reemplaza el análisis visual y clínico del profesional."
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
+    }
+}
+
+/** A1 y B1 superpuestas: el día 1 de cada fase cae en la misma columna, y así hasta el día 30. */
+@Composable
+private fun OverlayBarsChart(baseline: List<Double>, intervention: List<Double>) {
+    val days = maxOf(baseline.size, intervention.size).coerceAtMost(30)
+    if (days == 0) return
+    val measurer = rememberTextMeasurer()
+    val axis = MaterialTheme.colorScheme.onSurfaceVariant
+    val grid = LocalUsBrainSemantic.current.grid
+    val baselineColor = LocalUsBrainSemantic.current.baseline
+    val interventionColor = LocalUsBrainSemantic.current.intervention
+    val a = baseline.take(days)
+    val b = intervention.take(days)
+    val top = max(1.0, (a + b).maxOrNull() ?: 1.0) * 1.1
+    Canvas(Modifier.fillMaxWidth().height(230.dp)) {
+        val left = 34f
+        val bottom = 40f
+        val plotTop = 8f
+        val plotHeight = size.height - plotTop - bottom
+        val base = plotTop + plotHeight
+        val slot = (size.width - left) / days
+        fun y(value: Double) = base - (value / top).toFloat() * plotHeight
+        for (step in 0..4) {
+            val value = top * step / 4
+            val gy = y(value)
+            drawLine(grid, Offset(left, gy), Offset(size.width, gy), 1f)
+            val label = measurer.measure(analyticsFmt(value), TextStyle(fontSize = 9.sp, color = axis))
+            drawText(label, topLeft = Offset(left - label.size.width - 6f, gy - label.size.height / 2f))
+        }
+        for (day in 0 until days) {
+            val x0 = left + day * slot
+            // A1 ancha y translúcida detrás; B1 angosta delante: se ven las dos en el mismo día.
+            a.getOrNull(day)?.let { value ->
+                drawRect(baselineColor.copy(alpha = 0.45f), Offset(x0 + slot * 0.08f, y(value)),
+                    androidx.compose.ui.geometry.Size(slot * 0.84f, base - y(value)))
+            }
+            b.getOrNull(day)?.let { value ->
+                drawRect(interventionColor, Offset(x0 + slot * 0.3f, y(value)),
+                    androidx.compose.ui.geometry.Size(slot * 0.4f, base - y(value)))
+            }
+            val number = day + 1
+            if (number == 1 || number % 5 == 0) {
+                val label = measurer.measure(number.toString(), TextStyle(fontSize = 9.sp, color = axis))
+                drawText(label, topLeft = Offset(x0 + slot / 2f - label.size.width / 2f, base + 4f))
+            }
+        }
+        val title = measurer.measure("Día de muestra", TextStyle(fontSize = 9.sp, color = axis, fontWeight = FontWeight.SemiBold))
+        drawText(title, topLeft = Offset(size.width - title.size.width, size.height - title.size.height))
+    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        AnalyticsLegend(baselineColor, "A1 · línea base")
+        AnalyticsLegend(interventionColor, "B1 · intervención")
     }
 }
 

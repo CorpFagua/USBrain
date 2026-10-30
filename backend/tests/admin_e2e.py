@@ -74,8 +74,14 @@ check(all(g["participants"] >= 3 for g in study["program_groups"] + study["age_g
 ana_series = [x for x in analytics["series"] if x["behavior"] == "Episodios de ansiedad en clase"]
 check(len(ana_series) == 1 and len(ana_series[0]["baseline"]) == 30,
       "el caso individual de Ana sigue aparte aunque su conducta se llame igual que la del estudio")
-check(not any(u["email"].endswith("@demo.usbrain.local") for u in overview(S)["users"]),
-      "los participantes sintéticos no aparecen en la lista de usuarios")
+synthetic = [u for u in overview(S)["users"] if u["email"].endswith("@demo.usbrain.local")]
+check(len(synthetic) == 201 and all(u["synthetic"] and u["status"] == "DISABLED" for u in synthetic),
+      "los 200 participantes y su terapeuta aparecen en Usuarios, marcados como sintéticos e inactivos")
+status, body = call("POST", f"/admin/users/{synthetic[0]['id']}", {"status": "ACTIVE"}, S)
+check(status == 409 and body["error"] == "synthetic_user", "un participante sintético no se puede habilitar")
+status, body = call("POST", f"/admin/users/{synthetic[0]['id']}/actions",
+                    {"action": "set_password", "password": "Abcdef1!Xy"}, S)
+check(status == 409, "…ni darle contraseña")
 status, body = call("GET", "/admin/analytics", token=A)
 check(status == 403, "el administrador normal no accede al análisis seudonimizado")
 
