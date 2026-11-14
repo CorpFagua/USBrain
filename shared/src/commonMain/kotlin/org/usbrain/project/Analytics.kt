@@ -126,6 +126,43 @@ fun pairedTest(pairs: List<Pair<Double, Double>>, expectedDirection: String): Hy
     )
 }
 
+/** Resumen al estilo de pandas `describe()`; std es la desviación muestral (n − 1). */
+data class DescriptiveStats(
+    val count: Int,
+    val mean: Double,
+    val std: Double,
+    val min: Double,
+    val q1: Double,
+    val median: Double,
+    val q3: Double,
+    val max: Double,
+) {
+    val iqr: Double get() = q3 - q1
+}
+
+fun describe(values: List<Double>): DescriptiveStats? {
+    if (values.isEmpty()) return null
+    val sorted = values.sorted()
+    return DescriptiveStats(
+        count = values.size,
+        mean = values.average(),
+        std = sqrt(sampleVariance(values)),
+        min = sorted.first(),
+        q1 = quantile(sorted, 0.25),
+        median = quantile(sorted, 0.5),
+        q3 = quantile(sorted, 0.75),
+        max = sorted.last(),
+    )
+}
+
+/** Percentil por interpolación lineal entre posiciones, igual que NumPy/pandas por defecto. */
+private fun quantile(sorted: List<Double>, p: Double): Double {
+    val position = p * (sorted.size - 1)
+    val index = position.toInt()
+    val next = sorted[(index + 1).coerceAtMost(sorted.lastIndex)]
+    return sorted[index] + (position - index) * (next - sorted[index])
+}
+
 /** Media e intervalo del 95 % de una lista de valores (para dibujar cada fase). */
 fun meanWithCi(values: List<Double>): Triple<Double, Double, Double>? {
     if (values.size < 2) return null

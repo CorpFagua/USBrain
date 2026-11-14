@@ -75,6 +75,21 @@ class AnalyticsTest {
     }
 
     @Test
+    fun describeMatchesPandas() {
+        // pd.Series([4, 1, 3, 2]).describe()
+        val stats = assertNotNull(describe(listOf(4.0, 1.0, 3.0, 2.0)))
+        assertEquals(4, stats.count)
+        assertEquals(2.5, stats.mean, 1e-9)
+        assertEquals(1.2910, stats.std, 1e-4)
+        assertEquals(1.75, stats.q1, 1e-9)
+        assertEquals(2.5, stats.median, 1e-9)
+        assertEquals(3.25, stats.q3, 1e-9)
+        assertEquals(1.0, stats.min, 1e-9)
+        assertEquals(4.0, stats.max, 1e-9)
+        assertNull(describe(emptyList()))
+    }
+
+    @Test
     fun needsAtLeastThreeValuesPerSide() {
         assertNull(welchTest(listOf(1.0, 2.0), listOf(1.0, 2.0, 3.0), "DECREASE"))
         assertNull(pairedTest(listOf(1.0 to 0.0, 2.0 to 1.0), "DECREASE"))
