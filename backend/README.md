@@ -178,27 +178,33 @@ pendiente cada día hasta que se registra ese día.
 
 ## Exportación analítica segura (`/ords/usbrain/v1/admin/analytics`)
 
-`GET admin/analytics` requiere Bearer y el permiso sensible `analytics.view`, asignado por defecto
-únicamente a `SUPERADMIN`. APEX no es otra base ni necesita una conexión adicional: APEX y ORDS
-consultan el mismo esquema Oracle `USBRAIN`.
+`GET admin/analytics` requiere Bearer y el permiso sensible `analytics.view` (por defecto solo
+`SUPERADMIN`). APEX y ORDS consultan el mismo esquema `USBRAIN`. La respuesta tiene dos partes:
 
-La respuesta contiene exclusivamente series aptas para comparar línea base e intervención:
+- **`series`**: casos individuales (conductas sin `study_code`). Cada uno trae un identificador
+  seudónimo (SHA-256), conducta, dimensión, unidad, dirección esperada y los totales diarios de
+  **A1** y de **B1** con su día relativo y su fecha (hace falta para ordenarlos). Solo aparecen
+  con al menos 3 días en cada fase.
+- **`studies`**: estudios de grupo (conductas con el mismo `study_code`). Por participante solo
+  dos números, sin identificador: su media diaria en A1 y en B1. Además, la serie diaria promedio
+  del grupo (sin fechas) y grupos por programa y edad con n ≥ 3.
 
-- identificador seudónimo derivado mediante SHA-256;
-- nombre de la conducta y dimensión de medición;
-- fase, número ordinal de sesión y valor.
+Nunca exporta nombres, correos, documentos, diagnósticos ni notas. El seudónimo es un hash del id
+interno con una sal fija: sirve para no mostrar identidades, pero no es anonimización.
 
-No exporta nombres, correos, documentos, diagnósticos ni notas. La fecha de observación se entrega
-al superadministrador autorizado porque es necesaria para sumar episodios por día y ordenar la serie.
-Una serie aparece
-solo cuando dispone de al menos tres observaciones en cada fase. La aplicación utiliza todos los
-valores para la comparación estadística y reduce únicamente los puntos dibujados cuando la gráfica
-sería demasiado densa.
+## Fases y parámetros clínicos
 
-Cada punto incluye el total diario y su fecha de observación para construir las vistas cronológica,
-semanal, mensual y de calendario. Los agregados por programa académico se devuelven únicamente
-cuando existen al menos tres participantes en el grupo; son descriptivos y no deben interpretarse
-como evidencia causal sobre una carrera.
+- `POST /v1/app/behaviors/:id/next-phase`: termina la fase actual y abre la siguiente
+  (A1 → B1 → A2…). Exige el mínimo de días con registro por dimensión (409
+  `insufficient_observations`) y retira las actividades de la fase que termina.
+- `POST /v1/app/behaviors/:id/baseline`: crea el registro diario de la fase actual. Las
+  dimensiones solo se eligen en A1 antes del primer registro; después se ignoran.
+- `POST /v1/admin/settings` `{"min_phase_observations": 3..30}`: requiere `settings.clinical`.
+  El valor vive en la tabla `usb_app_settings` (también editable desde APEX).
+- Reglas del servidor: la fase de una tarea es la fase actual de la conducta (se ignora la que
+  envíe el cliente); en la línea base solo se crean mediciones (409 `baseline_no_treatment`); el
+  registro autónomo usa una dimensión de la línea base (400 `dimension_not_measured`); no se
+  registra en una actividad de una fase terminada (409 `phase_closed`).
 
 Alta de pacientes (SQL o APEX):
 

@@ -10,6 +10,7 @@ create or replace package usb_admin_api authid definer as
 
   procedure overview(p_authorization varchar2);
   procedure analytics(p_authorization varchar2);
+  procedure update_settings(p_authorization varchar2, p_body clob);
   procedure create_user(p_authorization varchar2, p_body clob);
   procedure update_user(p_authorization varchar2, p_user_id varchar2, p_body clob);
   procedure user_action(p_authorization varchar2, p_user_id varchar2, p_body clob);
@@ -57,6 +58,15 @@ create or replace package body usb_admin_api as
   exception
     when others then usb_api.handle_error('GET /admin/analytics');
   end analytics;
+
+  procedure update_settings(p_authorization varchar2, p_body clob) is
+  begin
+    usb_api.start_authenticated(p_authorization);
+    usb_admin.update_settings(usb_api.parse(p_body));
+    respond_ok;
+  exception
+    when others then usb_api.handle_error('POST /admin/settings');
+  end update_settings;
 
   procedure create_user(p_authorization varchar2, p_body clob) is
   begin

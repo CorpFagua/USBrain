@@ -90,6 +90,7 @@ internal fun AdminHomeScreen(state: PrototypeState, dark: Boolean, onToggleTheme
             StatTile("${state.patients.size}", "pacientes", MaterialTheme.colorScheme.onSurface)
         }
         AdminMessages(state)
+        if (state.can("settings.clinical")) ClinicalSettingsCard(state)
         if (state.can("audit.view") && data != null) {
             SectionLabel("Actividad de seguridad reciente")
             ElevatedCard(Modifier.fillMaxWidth()) {
@@ -127,6 +128,36 @@ internal fun AdminHomeScreen(state: PrototypeState, dark: Boolean, onToggleTheme
     }
 }
 
+/** Parámetros del flujo clínico; los aplica el servidor al cambiar de fase. */
+@Composable
+private fun ClinicalSettingsCard(state: PrototypeState) {
+    LaunchedEffect(state.minPhaseObservations) { state.draftMinPhaseObservations = state.minPhaseObservations.toString() }
+    SectionLabel("Parámetros clínicos")
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Mínimo de observaciones por fase", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Días con registro que necesita cada dimensión medida para que el terapeuta pueda terminar una fase (A1, B1, A2…). Entre 3 y 30; el análisis estadístico pide al menos 3.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    state.draftMinPhaseObservations,
+                    { state.draftMinPhaseObservations = it.filter(Char::isDigit).take(2) },
+                    Modifier.weight(1f),
+                    label = { Text("Días") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                Button(onClick = { state.saveClinicalSettings() }, enabled = !state.busy) { Text("Guardar") }
+            }
+            state.settingsInfo?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = LocalUsBrainSemantic.current.success) }
+            state.settingsError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        }
+    }
+}
+
 private fun eventLabel(type: String): String = when (type) {
     "LOGIN_SUCCESS" -> "Inicio de sesión"
     "LOGIN_BAD_PASSWORD" -> "Contraseña incorrecta"
@@ -142,6 +173,7 @@ private fun eventLabel(type: String): String = when (type) {
     "ADMIN_USER_CREATED" -> "Usuario creado"
     "ADMIN_USER_UPDATED" -> "Usuario modificado"
     "ADMIN_USER_PERMISSIONS" -> "Permisos individuales modificados"
+    "SETTINGS_UPDATED" -> "Parámetros clínicos modificados"
     "ROLE_CREATED" -> "Rol creado"
     "ROLE_UPDATED" -> "Rol modificado"
     "ROLE_DELETED" -> "Rol borrado"
@@ -150,10 +182,32 @@ private fun eventLabel(type: String): String = when (type) {
 
 /* ----------------------------- usuarios ----------------------------- */
 
+private enum class UserStatusFilter(val label: String) { ACTIVE("Activos"), INACTIVE("Inactivos"), ALL("Todos") }
+
+private const val USERS_PAGE = 50
+
+/** Quita tildes y mayúsculas para que "patino" encuentre a "Patiño". */
+private fun searchable(text: String): String = text.lowercase()
+    .replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n')
+
 @Composable
 internal fun AdminUsersScreen(state: PrototypeState) {
     LaunchedEffect(Unit) { state.loadAdmin() }
     val users = state.adminData?.users.orEmpty()
+    var query by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf(UserStatusFilter.ACTIVE) }
+    val words = searchable(query).split(' ').filter { it.isNotBlank() }
+    val matching = users.filter { user ->
+        val byStatus = when (filter) {
+            UserStatusFilter.ACTIVE -> user.status == "ACTIVE"
+            UserStatusFilter.INACTIVE -> user.status != "ACTIVE"
+            UserStatusFilter.ALL -> true
+        }
+        val text = searchable("${user.fullName} ${user.email} ${user.roleName} ${user.role}")
+        byStatus && words.all { it in text }
+    }
+    // De a 50: con los participantes sintéticos la lista pasa de 200 y se dibujaría lenta.
+    var shown by remember(query, filter) { mutableStateOf(USERS_PAGE) }
     ScreenScaffold {
         Text("Usuarios", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(
@@ -162,9 +216,40 @@ internal fun AdminUsersScreen(state: PrototypeState) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        OutlinedTextField(
+            query, { query = it.take(80) }, Modifier.fillMaxWidth(),
+            label = { Text("Buscar por nombre, correo o rol") }, singleLine = true,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            UserStatusFilter.entries.forEach { option ->
+                val count = users.count {
+                    when (option) {
+                        UserStatusFilter.ACTIVE -> it.status == "ACTIVE"
+                        UserStatusFilter.INACTIVE -> it.status != "ACTIVE"
+                        UserStatusFilter.ALL -> true
+                    }
+                }
+                TabChip(filter == option, { filter = option }, "${option.label} ($count)")
+            }
+        }
         AdminMessages(state)
         if (state.adminData == null && state.adminError == null) Text("Cargando…", style = MaterialTheme.typography.bodySmall)
-        users.forEach { user -> UserRow(user, enabled = state.can("users.manage")) { state.openUser(user.id) } }
+        if (state.adminData != null) {
+            Text(
+                if (matching.isEmpty()) "Ningún usuario coincide con la búsqueda."
+                else "Mostrando ${minOf(shown, matching.size)} de ${matching.size}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        matching.take(shown).forEach { user ->
+            UserRow(user, enabled = state.can("users.manage") && !user.synthetic) { state.openUser(user.id) }
+        }
+        if (matching.size > shown) {
+            OutlinedButton(onClick = { shown += USERS_PAGE }, Modifier.fillMaxWidth()) {
+                Text("Mostrar ${minOf(USERS_PAGE, matching.size - shown)} más")
+            }
+        }
         Spacer(Modifier.height(72.dp))
     }
 }
@@ -187,7 +272,11 @@ private fun UserRow(user: AdminUserDto, enabled: Boolean, onClick: () -> Unit) {
                     user.locked -> Pill("Bloqueado", MaterialTheme.colorScheme.error)
                     else -> Pill("Activo", s.success)
                 }
-                Pill(if (user.mfaEnabled) "2FA activo" else "Sin 2FA", MaterialTheme.colorScheme.onSurfaceVariant)
+                if (user.synthetic) {
+                    Pill("Participante sintético · solo lectura", Brand.Orange)
+                } else {
+                    Pill(if (user.mfaEnabled) "2FA activo" else "Sin 2FA", MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 user.therapistName?.let { Pill("Terapeuta: $it", MaterialTheme.colorScheme.onSurfaceVariant) }
                 user.overrides.count { it.active }.takeIf { it > 0 }?.let {
                     Pill(if (it == 1) "1 permiso individual" else "$it permisos individuales", Brand.Orange)

@@ -162,6 +162,22 @@ select s.role_id, s.permission_id
         select 'PATIENT', 'entry.record' from dual) s
  where not exists (select 1 from usb_role_permissions rp where rp.role_id = s.role_id);
 
+-- Parámetros clínicos (p. ej. mínimo de observaciones por fase). Se crea aparte para darlo
+-- a ADMIN solo la primera vez: si luego el super administrador se lo quita, no vuelve.
+declare
+  l_count number;
+begin
+  select count(*) into l_count from usb_permissions where permission_id = 'settings.clinical';
+  if l_count = 0 then
+    insert into usb_permissions (permission_id, name, category, description, sensitive)
+    values ('settings.clinical', 'Configurar parámetros clínicos', 'Administración',
+            'Define reglas del flujo clínico, como el mínimo de observaciones para cambiar de fase.', true);
+    insert into usb_role_permissions (role_id, permission_id) values ('SUPERADMIN', 'settings.clinical');
+    insert into usb_role_permissions (role_id, permission_id) values ('ADMIN', 'settings.clinical');
+  end if;
+end;
+/
+
 create table if not exists usb_users (
   user_id             number generated always as identity primary key,
   email               varchar2(320) not null,
@@ -257,6 +273,10 @@ begin
          'alter table usb_users add constraint usb_users_role_fk foreign key (role) references usb_roles');
   ddl_if(q'[select 1 - count(*) from user_tab_columns where table_name = 'USB_USERS' and column_name = 'MUST_CHANGE_PASSWORD']',
          'alter table usb_users add (must_change_password boolean default false not null)');
+  -- Participantes de estudios con datos sintéticos (semilla): sin contraseña ni acceso; solo
+  -- alimentan el análisis estadístico y no aparecen en la administración de usuarios.
+  ddl_if(q'[select 1 - count(*) from user_tab_columns where table_name = 'USB_USERS' and column_name = 'IS_SYNTHETIC']',
+         'alter table usb_users add (is_synthetic boolean default false not null)');
   ddl_if(q'[select count(*) from user_constraints where constraint_name = 'USB_CHALLENGES_PURPOSE_CK' and search_condition_vc not like '%CHANGE%']',
          'alter table usb_login_challenges drop constraint usb_challenges_purpose_ck');
   ddl_if(q'[select 1 - count(*) from user_constraints where constraint_name = 'USB_CHALLENGES_PURPOSE_CK']',

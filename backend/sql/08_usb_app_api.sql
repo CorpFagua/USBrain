@@ -13,6 +13,7 @@ create or replace package usb_app_api authid definer as
   procedure create_behavior(p_authorization varchar2, p_body clob);
   procedure configure_baseline(p_authorization varchar2, p_behavior_id varchar2, p_body clob);
   procedure close_baseline(p_authorization varchar2, p_behavior_id varchar2);
+  procedure advance_phase(p_authorization varchar2, p_behavior_id varchar2);
   procedure create_task(p_authorization varchar2, p_body clob);
   procedure record_entry(p_authorization varchar2, p_task_id varchar2, p_body clob);
   procedure record_widget_entry(p_authorization varchar2, p_task_id varchar2, p_body clob);
@@ -94,6 +95,16 @@ create or replace package body usb_app_api as
   exception
     when others then usb_api.handle_error('POST /app/behaviors/:id/close-baseline');
   end close_baseline;
+
+  procedure advance_phase(p_authorization varchar2, p_behavior_id varchar2) is
+    l_body json_object_t := json_object_t();
+  begin
+    usb_api.start_authenticated(p_authorization);
+    l_body.put('phase_seq', usb_domain.advance_phase(required_id(p_behavior_id)));
+    usb_api.respond_ok(l_body);
+  exception
+    when others then usb_api.handle_error('POST /app/behaviors/:id/next-phase');
+  end advance_phase;
 
   procedure create_task(p_authorization varchar2, p_body clob) is
   begin
